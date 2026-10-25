@@ -15,6 +15,7 @@ import (
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
 	cmfake "github.com/cert-manager/cert-manager/pkg/client/clientset/versioned/fake"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -110,10 +111,10 @@ func TestSignedSecrets(t *testing.T) {
 	ctx := context.Background()
 	k, _ := newFake()
 	root, chain := testChain(t, "nas.wilsonfi.dev")
-	if err := k.SaveSigned(ctx, "nas-x", Managed, chain, []byte("key"), root, "rsa2048", 1); err != nil {
+	if err := k.SaveSigned(ctx, Signed{ID: "nas-x", Mode: Managed, ChainPEM: chain, KeyPEM: []byte("key"), Root: root, KeyType: "rsa2048", Revision: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := k.SaveSigned(ctx, "dev-y", FromCSR, chain, nil, root, "ecdsap-256", 1); err != nil {
+	if err := k.SaveSigned(ctx, Signed{ID: "dev-y", Mode: FromCSR, ChainPEM: chain, KeyPEM: nil, Root: root, KeyType: "ecdsap-256", Revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	certs, _ := k.List(ctx)
@@ -129,7 +130,7 @@ func TestSignedSecrets(t *testing.T) {
 	if c.State != Failed {
 		t.Errorf("state after error = %s", c.State)
 	}
-	if err := k.SaveSigned(ctx, "nas-x", Managed, chain, []byte("key"), root, "rsa2048", 2); err != nil {
+	if err := k.SaveSigned(ctx, Signed{ID: "nas-x", Mode: Managed, ChainPEM: chain, KeyPEM: []byte("key"), Root: root, KeyType: "rsa2048", Revision: 2}); err != nil {
 		t.Fatal(err)
 	}
 	c, _ = k.Get(ctx, "nas-x")
@@ -155,4 +156,54 @@ func testChain(t *testing.T, name string) (*x509.Certificate, []byte) {
 	lT := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
 	der, _ := x509.CreateCertificate(rand.Reader, lT, ca, &key.PublicKey, caKey)
 	return ca, append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})...)
+}
+
+func TestRevokedState(t *testing.T) {
+	ctx := context.Background()
+	k, _ := newFake()
+	root, chain := testChain(t, "nas.wilsonfi.dev")
+	k.SaveSigned(ctx, Signed{ID: "nas", Mode: Managed, ChainPEM: chain, KeyPEM: []byte("key"), Root: root, KeyType: "rsa2048", Revision: 1})
+	if err := k.MarkRevoked(ctx, "nas", "Key compromise"); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := k.Get(ctx, "nas")
+	if c.State != Revoked || c.RevokedReason != "Key compromise" {
+		t.Errorf("state=%s reason=%q", c.State, c.RevokedReason)
+	}
+	if _, err := k.Key(ctx, c); err == nil {
+		t.Error("key still readable after revocation")
+	}
+}
+
+func TestGitOpsCerts(t *testing.T) {
+	ctx := context.Background()
+	root, chain := testChain(t, "radius.wilsonfi.dev")
+	_ = root
+	core := fake.NewClientset(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "pki", Name: "radius-tls"},
+			Data: map[string][]byte{"tls.crt": chain, "tls.key": []byte("k"), "keystore.p12": []byte("p12")}},
+	)
+	cm := cmfake.NewClientset(&cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "pki", Name: "clearpass-radius"},
+		Spec: cmapi.CertificateSpec{SecretName: "radius-tls", DNSNames: []string{"radius.wilsonfi.dev"},
+			IssuerRef: issuerRef("step-ca-acme"),
+			Keystores: &cmapi.CertificateKeystores{PKCS12: &cmapi.PKCS12Keystore{Create: true,
+				PasswordSecretRef: cmmeta.SecretKeySelector{LocalObjectReference: cmmeta.LocalObjectReference{Name: "p12-pw"}, Key: "password"}}}},
+		Status: cmapi.CertificateStatus{Conditions: []cmapi.CertificateCondition{{Type: cmapi.CertificateConditionReady, Status: cmmeta.ConditionTrue}}},
+	}, &cmapi.Certificate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "pki", Name: "no-access"},
+		Spec:       cmapi.CertificateSpec{SecretName: "forbidden-tls", IssuerRef: issuerRef("x")},
+	})
+	k := NewWithClients("pki-managed", core, cm)
+	gs, err := k.GitOpsCerts(ctx, "pki")
+	if err != nil || len(gs) != 2 {
+		t.Fatalf("%v %d", err, len(gs))
+	}
+	g := gs[0]
+	if g.Name != "clearpass-radius" || !g.Ready || !g.HasP12 || !g.HasKey || g.Leaf == nil || g.P12Password.Name != "p12-pw" {
+		t.Errorf("radius = %+v", g)
+	}
+	if gs[1].SecretError == "" {
+		t.Error("missing Secret not reported")
+	}
 }

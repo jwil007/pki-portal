@@ -1,0 +1,28 @@
+{{define "content"}}
+<h1>Managed by GitOps</h1>
+<p class="muted">Certificates in namespace <code>{{.Namespace}}</code> are defined in Git and renewed by cert-manager. They're read-only here: download, but don't change.</p>
+{{range .Cards}}
+<section class="card">
+  <div class="head"><h2>{{.Name}}</h2>{{if .Ready}}<span class="badge ready">ready</span>{{else}}<span class="badge failed">not ready</span>{{end}}</div>
+  {{if not .Ready}}<p class="msg err">{{explain .Message}}</p>{{end}}
+  {{if .RenewedSince}}<p class="msg warn">Renewed since your last download ({{date .LastDownloaded}}). Devices using it need the new one.</p>{{end}}
+  <table class="kv">
+    <tr><th>Names</th><td>{{join .DNSNames ", "}}</td></tr>
+    <tr><th>Issuer</th><td><code>{{.Issuer}}</code></td></tr>
+    {{if .Leaf}}<tr><th>Expires</th><td>{{date .Leaf.NotAfter}} ({{.DaysLeft}} days)</td></tr>
+    <tr><th>Serial</th><td class="mono small">{{.Serial}}</td></tr>{{end}}
+    <tr><th>Next renewal</th><td>{{date .RenewalTime}}</td></tr>
+    <tr><th>Revision</th><td>{{.Revision}}</td></tr>
+    <tr><th>Last download</th><td>{{if .LastDownloaded.IsZero}}never{{else}}{{date .LastDownloaded}}{{end}}</td></tr>
+  </table>
+  {{if .SecretError}}<p class="msg err">Can't read Secret <code>{{.SecretName}}</code>: {{.SecretError}}</p>
+  {{else}}
+  <div class="downloads">
+    {{if .HasP12}}<form method="post" action="/gitops/{{.Name}}/download"><input type="hidden" name="what" value="p12"><button class="primary">Download .p12 (as built by cert-manager)</button></form>{{end}}
+    <form method="post" action="/gitops/{{.Name}}/download"><input type="hidden" name="what" value="fullchain"><button>Full chain (PEM)</button></form>
+    {{if .P12Password}}<form method="post" action="/gitops/{{.Name}}/passphrase"><button>Reveal p12 passphrase</button></form>{{end}}
+  </div>
+  {{end}}
+</section>
+{{else}}<p class="muted">No certificates in {{.Namespace}}.</p>{{end}}
+{{end}}

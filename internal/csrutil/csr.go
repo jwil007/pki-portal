@@ -117,6 +117,16 @@ const (
 // Generate creates a key and a CSR for the given names (DNS names or IPs).
 // The first name becomes the CN. The key stays in memory.
 func Generate(kt KeyType, names []string) (crypto.Signer, []byte, error) {
+	cn := ""
+	if len(names) > 0 && len(names[0]) <= 64 {
+		cn = names[0]
+	}
+	return GenerateFor(kt, cn, names)
+}
+
+// GenerateFor creates a key and a CSR with an explicit CN. SANs may be DNS
+// names, IP addresses or email addresses.
+func GenerateFor(kt KeyType, cn string, sans []string) (crypto.Signer, []byte, error) {
 	var key crypto.Signer
 	var err error
 	switch kt {
@@ -128,16 +138,16 @@ func Generate(kt KeyType, names []string) (crypto.Signer, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	tmpl := &x509.CertificateRequest{}
-	for _, n := range names {
-		if ip := net.ParseIP(n); ip != nil {
-			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
-		} else {
+	tmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}
+	for _, n := range sans {
+		switch {
+		case net.ParseIP(n) != nil:
+			tmpl.IPAddresses = append(tmpl.IPAddresses, net.ParseIP(n))
+		case strings.Contains(n, "@"):
+			tmpl.EmailAddresses = append(tmpl.EmailAddresses, n)
+		default:
 			tmpl.DNSNames = append(tmpl.DNSNames, n)
 		}
-	}
-	if len(names) > 0 && len(names[0]) <= 64 {
-		tmpl.Subject = pkix.Name{CommonName: names[0]}
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
 	if err != nil {

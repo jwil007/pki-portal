@@ -90,7 +90,7 @@ func (m *Manager) Reconcile(ctx context.Context) {
 	for _, h := range hs {
 		d, ok := Get(h.Type)
 		c := byID[h.CertID]
-		if !ok || !h.Enabled || IsPassive(d) || c == nil || c.Leaf == nil {
+		if !ok || !h.Enabled || IsPassive(d) || c == nil || c.Leaf == nil || c.State == kube.Revoked {
 			continue
 		}
 		if c.Serial() == h.LastSerial || now.Before(h.NextAttempt) {

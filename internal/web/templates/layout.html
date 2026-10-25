@@ -18,6 +18,8 @@
     <a href="/certs" {{if eq .Path "/certs"}}class="on"{{end}}>Certificates</a>
     <a href="/certs/new" {{if eq .Path "/certs/new"}}class="on"{{end}}>New</a>
     <a href="/csr" {{if eq .Path "/csr"}}class="on"{{end}}>Upload CSR</a>
+    <a href="/clients" {{if eq .Path "/clients"}}class="on"{{end}}>Client certs</a>
+    {{if .GitOpsEnabled}}<a href="/gitops" {{if eq .Path "/gitops"}}class="on"{{end}}>GitOps</a>{{end}}
     <a href="/ca" {{if eq .Path "/ca"}}class="on"{{end}}>CA chain</a>
     <a href="/audit" {{if eq .Path "/audit"}}class="on"{{end}}>Audit</a>
   </nav>

@@ -146,7 +146,7 @@ func TestPullAPI(t *testing.T) {
 	ts, c, k, _ := newTestServerFull(t)
 	c.PostForm(ts.URL+"/login", url.Values{"password": {"hunter22"}})
 	root, chain := testChain(t)
-	if err := k.SaveSigned(context.Background(), "nas-x", kube.FromCSR, chain, nil, root, "rsa2048", 1); err != nil {
+	if err := k.SaveSigned(context.Background(), kube.Signed{ID: "nas-x", Mode: kube.FromCSR, ChainPEM: chain, Root: root, KeyType: "rsa2048", Revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := c.PostForm(ts.URL+"/certs/nas-x/hooks", url.Values{"type": {"pull"}})
@@ -213,4 +213,19 @@ func testChain(t *testing.T) (*x509.Certificate, []byte) {
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	c, _ := x509.ParseCertificate(der)
 	return c, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func TestGitOpsView(t *testing.T) {
+	// The GitOps data logic is covered in kube; this checks the pages render.
+	ts, c, _, cfg := newTestServerFull(t)
+	cfg.GitOpsNamespace = "pki"
+	c.PostForm(ts.URL+"/login", url.Values{"password": {"hunter22"}})
+	resp, _ := c.Get(ts.URL + "/gitops")
+	if b := body(t, resp); resp.StatusCode != 200 || !strings.Contains(b, "Managed by GitOps") {
+		t.Fatalf("gitops page: %d %s", resp.StatusCode, b)
+	}
+	resp, _ = c.Get(ts.URL + "/clients")
+	if b := body(t, resp); resp.StatusCode != 200 || !strings.Contains(b, "aren't enabled") {
+		t.Errorf("clients page: %d", resp.StatusCode)
+	}
 }

@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -133,7 +135,7 @@ type tokenClaims struct {
 	SHA  string   `json:"sha"`
 }
 
-func (c *Client) token(ctx context.Context, subject string, sans []string) (string, error) {
+func (c *Client) token(ctx context.Context, subject string, sans []string, path string) (string, error) {
 	jwk, err := c.key(ctx)
 	if err != nil {
 		return "", err
@@ -151,7 +153,7 @@ func (c *Client) token(ctx context.Context, subject string, sans []string) (stri
 		Claims: jose.Claims{
 			Issuer:    c.provisioner,
 			Subject:   subject,
-			Audience:  jose.Audience{c.base.String() + "/1.0/sign"},
+			Audience:  jose.Audience{c.base.String() + path},
 			IssuedAt:  jose.NewNumericDate(now),
 			NotBefore: jose.NewNumericDate(now),
 			Expiry:    jose.NewNumericDate(now.Add(5 * time.Minute)),
@@ -166,7 +168,7 @@ func (c *Client) token(ctx context.Context, subject string, sans []string) (stri
 // Sign submits a PEM CSR. subject becomes the CN; sans must match the CSR's SANs.
 // It returns the PEM leaf followed by the intermediate(s).
 func (c *Client) Sign(ctx context.Context, csrPEM []byte, subject string, sans []string, lifetime time.Duration) ([]byte, error) {
-	ott, err := c.token(ctx, subject, sans)
+	ott, err := c.token(ctx, subject, sans, "/1.0/sign")
 	if err != nil {
 		return nil, err
 	}
@@ -201,4 +203,58 @@ func (c *Client) Sign(ctx context.Context, csrPEM []byte, subject string, sans [
 		return []byte(strings.Join(out.CertChain, "\n")), nil
 	}
 	return []byte(out.Crt + "\n" + out.CA), nil
+}
+
+// Revoke marks a certificate revoked in step-ca's database (passive revocation:
+// it shows up in the CRL; step-ca has no OCSP). Any JWK provisioner may revoke.
+func (c *Client) Revoke(ctx context.Context, serial *big.Int, reasonCode int, reason string) error {
+	ott, err := c.token(ctx, serial.String(), nil, "/1.0/revoke")
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{
+		"serial": serial.String(), "ott": ott, "reasonCode": reasonCode, "reason": reason, "passive": true,
+	})
+	req, _ := http.NewRequestWithContext(ctx, "POST", c.base.String()+"/1.0/revoke", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("step-ca revoke: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		var e struct {
+			Message string `json:"message"`
+		}
+		json.NewDecoder(resp.Body).Decode(&e)
+		if e.Message == "" {
+			e.Message = resp.Status
+		}
+		return errors.New("step-ca refused to revoke: " + e.Message)
+	}
+	return nil
+}
+
+// CRL fetches step-ca's current CRL (DER). It returns ErrNoCRL when CRLs aren't enabled.
+func (c *Client) CRL(ctx context.Context) ([]byte, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.base.String()+"/1.0/crl", nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
+		return nil, ErrNoCRL
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("step-ca /1.0/crl returned %s", resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+}
+
+var ErrNoCRL = errors.New("CRL generation isn't enabled on step-ca")
+
+// WithProvisioner returns a client for another JWK provisioner on the same CA.
+func (c *Client) WithProvisioner(name string) *Client {
+	return &Client{base: c.base, provisioner: name, password: c.password, root: c.root, http: c.http}
 }

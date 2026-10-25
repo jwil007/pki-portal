@@ -67,6 +67,21 @@ func (p Policy) CheckInternal(names []string) error {
 	return nil
 }
 
+// CheckEmail validates an email SAN (e.g. a user's UPN) against the allowed domains.
+func (p Policy) CheckEmail(email string) error {
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" || strings.ContainsAny(local, " ,;<>") {
+		return fmt.Errorf("%q isn't a valid email address", email)
+	}
+	if err := validHostname(domain); err != nil {
+		return fmt.Errorf("%s: %w", email, err)
+	}
+	if !underAny(domain, p.Domains) {
+		return fmt.Errorf("%s: email domain must be under %s", email, strings.Join(p.Domains, ", "))
+	}
+	return nil
+}
+
 const maxNames = 50
 
 // Normalize lower-cases, trims and de-duplicates names, keeping order.

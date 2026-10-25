@@ -1,0 +1,44 @@
+{{define "content"}}
+<h1>Client certificate (EAP-TLS)</h1>
+<p class="muted">For 802.1X / EAP-TLS on Wi-Fi or wired. Signed by your step-ca, trusted by RADIUS servers (ClearPass) that have the Wilsonfi CA in their trust list.</p>
+{{if not .Enabled}}<p class="msg err">Client certificates aren't enabled: the portal has no client provisioner configured.</p>{{end}}
+{{with .Form}}{{if .Error}}<p class="msg err">{{.Error}}</p>{{end}}{{end}}
+<form class="card form" method="post" action="/clients">
+  <fieldset>
+    <legend>1. Who is it for?</legend>
+    <label class="choice"><input type="radio" name="profile" value="user" {{if ne .Form.Profile "device"}}checked{{end}}> <b>User</b> <span>A person, identified by AD username</span></label>
+    <label class="choice"><input type="radio" name="profile" value="device" {{if eq .Form.Profile "device"}}checked{{end}}> <b>Device</b> <span>A machine, identified by hostname</span></label>
+  </fieldset>
+  <fieldset class="for-user">
+    <legend>2. User</legend>
+    <label>AD username (sAMAccountName) <input type="text" name="username" value="{{.Form.Username}}" placeholder="testuser" autocomplete="off"></label>
+    <p class="muted small">Becomes the certificate CN, which ClearPass uses to look the user up in AD.</p>
+    <label>Email / UPN SAN <input type="text" name="email" value="{{.Form.Email}}" placeholder="testuser@{{.Domain}}" autocomplete="off"></label>
+    <p class="muted small">Leave empty for <code>username@{{.Domain}}</code>.</p>
+  </fieldset>
+  <fieldset class="for-device">
+    <legend>2. Device</legend>
+    <label>Hostname <input type="text" name="device" value="{{.Form.Device}}" placeholder="laptop01 or laptop01.wilsonfi.dev" autocomplete="off"></label>
+    <p class="muted small">Becomes the CN and DNS SAN. A short name gets the default domain appended.</p>
+  </fieldset>
+  <fieldset>
+    <legend>3. Lifecycle</legend>
+    <label class="choice"><input type="radio" name="lifecycle" value="managed" {{if .Form.Managed}}checked{{end}}> <b>Managed</b> <span>Renewed by the portal at 2/3 of its lifetime; re-download (or use a hook) after renewal</span></label>
+    <label class="choice"><input type="radio" name="lifecycle" value="unmanaged" {{if not .Form.Managed}}checked{{end}}> <b>Unmanaged</b> <span>Issue once; the key is only kept briefly for download</span></label>
+  </fieldset>
+  <fieldset>
+    <legend>4. Key</legend>
+    <label class="choice"><input type="radio" name="key" value="rsa2048" {{if ne .Form.KeyType "ecdsa256"}}checked{{end}}> <b>RSA 2048</b> <span>Most compatible (Android, Windows, older supplicants)</span></label>
+    <label class="choice"><input type="radio" name="key" value="ecdsa256" {{if eq .Form.KeyType "ecdsa256"}}checked{{end}}> <b>ECDSA P-256</b></label>
+  </fieldset>
+  <button class="primary" {{if not .Enabled}}disabled{{end}}>Issue client certificate</button>
+</form>
+<section class="card">
+  <h2>Installing it</h2>
+  <ul>
+    <li><b>Android:</b> download the <b>legacy .p12</b>. Install it under Settings › Security › Encryption &amp; credentials › Install a certificate › Wi-Fi certificate. Install the <a href="/ca">root CA</a> separately as a "CA certificate", then choose it as the Wi-Fi CA.</li>
+    <li><b>Windows / macOS / iOS:</b> the .p12 with the root included imports both in one step.</li>
+    <li><b>ClearPass:</b> the issuing CA must be in the Trust List with usage EAP. Revoked certs appear on the <a href="/ca">CRL</a>.</li>
+  </ul>
+</section>
+{{end}}

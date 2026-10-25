@@ -79,6 +79,21 @@ func fakeCA(t *testing.T, password string) (*httptest.Server, *x509.Certificate)
 		caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw}))
 		json.NewEncoder(w).Encode(map[string]any{"crt": leafPEM, "ca": caPEM, "certChain": []string{leafPEM, caPEM}})
 	})
+	mux.HandleFunc("POST /1.0/revoke", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Serial, OTT string
+			Passive     bool
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		tok, _ := jose.ParseSigned(req.OTT)
+		var claims tokenClaims
+		if tok == nil || tok.Claims(pub.Key, &claims) != nil || claims.Subject != req.Serial || !req.Passive ||
+			!slices.Contains(claims.Audience, srvURL+"/1.0/revoke") {
+			http.Error(w, `{"message":"bad revoke"}`, 401)
+			return
+		}
+		w.Write([]byte(`{"status":"ok"}`))
+	})
 	srv := httptest.NewTLSServer(mux)
 	srvURL = srv.URL
 	t.Cleanup(srv.Close)
@@ -128,5 +143,16 @@ func TestWrongPassword(t *testing.T) {
 	c2, _ := New(srv.URL, "missing", "s3cret", "", tlsRoot)
 	if _, err := c2.Sign(context.Background(), csr(t, "a.wilsonfi.dev"), "a.wilsonfi.dev", []string{"a.wilsonfi.dev"}, 0); err == nil {
 		t.Fatal("signed with unknown provisioner")
+	}
+}
+
+func TestRevoke(t *testing.T) {
+	srv, tlsRoot := fakeCA(t, "s3cret")
+	c, _ := New(srv.URL, "pki-portal", "s3cret", "", tlsRoot)
+	if err := c.Revoke(context.Background(), big.NewInt(123456789), 1, "key compromise"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CRL(context.Background()); err != ErrNoCRL {
+		t.Errorf("CRL on a CA without CRLs: %v", err)
 	}
 }

@@ -51,3 +51,12 @@ func TestCheckInternal(t *testing.T) {
 		t.Error("foreign domain accepted")
 	}
 }
+
+func TestCheckEmail(t *testing.T) {
+	p := Policy{Domains: []string{"wilsonfi.dev"}}
+	for e, ok := range map[string]bool{"testuser@ad.wilsonfi.dev": true, "a@wilsonfi.dev": true, "a@gmail.com": false, "nope": false, "@wilsonfi.dev": false} {
+		if (p.CheckEmail(e) == nil) != ok {
+			t.Errorf("CheckEmail(%q) ok=%v", e, !ok)
+		}
+	}
+}

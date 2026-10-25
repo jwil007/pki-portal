@@ -7,6 +7,8 @@
 <p class="muted">{{.Mode}} · {{.Class}} · <code>{{.Issuer}}</code>{{if eq .Backend "step-ca"}} (direct){{end}} · <code>{{.ID}}</code></p>
 {{end}}
 
+{{with .Cert}}{{if eq .State "revoked"}}<p class="msg err">Revoked {{date .RevokedAt}}: {{.RevokedReason}}. It's on step-ca's CRL, the key has been discarded, and it won't be renewed.</p>{{end}}{{end}}
+
 {{if .Steps}}
 <section class="card">
   <h2>Issuance progress</h2>
@@ -42,6 +44,8 @@
   <table class="kv">
     <tr><th>Subject</th><td>{{.Leaf.Subject}}</td></tr>
     <tr><th>DNS names</th><td>{{join .Leaf.DNSNames ", "}}</td></tr>
+    {{if .Leaf.EmailAddresses}}<tr><th>Email SANs</th><td>{{join .Leaf.EmailAddresses ", "}}</td></tr>{{end}}
+    {{if ne .Profile ""}}<tr><th>Profile</th><td>{{.Profile}}</td></tr>{{end}}
     {{if .Leaf.IPAddresses}}<tr><th>IP addresses</th><td>{{range $i, $ip := .Leaf.IPAddresses}}{{if $i}}, {{end}}{{$ip}}{{end}}</td></tr>{{end}}
     <tr><th>Issuer</th><td>{{.Leaf.Issuer}}</td></tr>
     <tr><th>Serial</th><td class="mono">{{.Serial}}</td></tr>
@@ -95,8 +99,15 @@
 {{with .Cert}}
 <section class="card actions">
   <h2>Actions</h2>
-  {{if eq .Mode "managed"}}
+  {{if and (eq .Mode "managed") (ne .State "revoked")}}
   <form method="post" action="/certs/{{.ID}}/renew" data-confirm="Re-issue this certificate now?{{if .Public}} This counts against Let's Encrypt rate limits.{{end}}"><button>Renew now</button></form>
+  {{end}}
+  {{if $.CanRevoke}}
+  <form method="post" action="/certs/{{.ID}}/revoke" class="revoke" data-confirm="Revoke this certificate? It goes on the CRL and can't be un-revoked.">
+    <select name="reason">{{range $.Reasons}}<option value="{{.Code}}">{{.Label}}</option>{{end}}</select>
+    <input type="text" name="note" placeholder="Note (optional)">
+    <button class="danger">Revoke</button>
+  </form>
   {{end}}
   <form method="post" action="/certs/{{.ID}}/delete" data-confirm="Delete {{index .Names 0}}?{{if eq .Mode "managed"}} The key Secret is deleted and renewal stops.{{end}} This can't be undone."><button class="danger">{{if eq .Mode "managed"}}Delete and stop renewing{{else}}Delete{{end}}</button></form>
 </section>

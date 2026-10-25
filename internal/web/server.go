@@ -172,6 +172,13 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /hooks/fields", s.hookFields)
 	auth.HandleFunc("POST /hooks/{hid}/run", s.hookRun)
 	auth.HandleFunc("POST /hooks/{hid}/delete", s.hookDelete)
+	auth.HandleFunc("GET /clients", s.clientsPage)
+	auth.HandleFunc("POST /clients", s.clientsCreate)
+	auth.HandleFunc("POST /certs/{id}/revoke", s.revoke)
+	auth.HandleFunc("GET /crl", s.crlFile)
+	auth.HandleFunc("GET /gitops", s.gitopsPage)
+	auth.HandleFunc("POST /gitops/{name}/download", s.gitopsDownload)
+	auth.HandleFunc("POST /gitops/{name}/passphrase", s.gitopsPassphrase)
 	auth.HandleFunc("GET /ca", s.caPage)
 	auth.HandleFunc("GET /ca/{file}", s.caFile)
 	auth.HandleFunc("GET /audit", s.audit)
@@ -296,6 +303,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, dat
 	data["PublicIssuer"] = s.cfg.PublicIssuer
 	data["Staging"] = strings.Contains(s.cfg.PublicIssuer, "staging")
 	data["InternalEnabled"] = s.internal != nil
+	data["GitOpsEnabled"] = s.cfg.GitOpsNamespace != ""
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		s.log.Error("render", "page", page, "err", err)

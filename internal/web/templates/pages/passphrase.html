@@ -1,0 +1,6 @@
+{{define "content"}}
+<h1>p12 passphrase</h1>
+<p class="muted">For <code>{{.Cert.Name}}</code>, from Secret <code>{{.Cert.P12Password.Name}}</code>. This reveal is recorded in the audit log.</p>
+<pre class="mono copy">{{.Passphrase}}</pre>
+<p><a class="button" href="/gitops">Back</a></p>
+{{end}}

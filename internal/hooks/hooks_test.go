@@ -237,7 +237,7 @@ func TestManagerDeliversOncePerSerial(t *testing.T) {
 	st, _ := store.Open(filepath.Join(t.TempDir(), "p.db"))
 	k := kube.NewWithClients("pki-managed", fake.NewClientset(), cmfake.NewClientset())
 	root, chain := certPEM(t, 1)
-	k.SaveSigned(ctx, "nas", kube.FromCSR, chain, nil, root, "rsa2048", 1)
+	k.SaveSigned(ctx, kube.Signed{ID: "nas", Mode: kube.FromCSR, ChainPEM: chain, KeyPEM: nil, Root: root, KeyType: "rsa2048", Revision: 1})
 
 	var events []string
 	fail := false
@@ -259,7 +259,7 @@ func TestManagerDeliversOncePerSerial(t *testing.T) {
 	}
 
 	_, chain2 := certPEM(t, 2)
-	k.SaveSigned(ctx, "nas", kube.FromCSR, chain2, nil, root, "rsa2048", 2)
+	k.SaveSigned(ctx, kube.Signed{ID: "nas", Mode: kube.FromCSR, ChainPEM: chain2, KeyPEM: nil, Root: root, KeyType: "rsa2048", Revision: 2})
 	fail = true
 	m.Reconcile(ctx)
 	h, _ := st.Hook(1)

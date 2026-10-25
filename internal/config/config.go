@@ -27,6 +27,9 @@ type Config struct {
 	StepCAProvisioner string
 	StepCAPassword    string // empty disables internal certificates
 	StepCADial        string // optional host:port to connect to instead of the URL's host
+	ClientProvisioner string // JWK provisioner for EAP-TLS client certs (no name policy); empty disables
+	ClientEmailDomain string // default domain for user certs' email SAN (UPN-style)
+	GitOpsNamespace   string // namespace of Git-managed certs to show read-only; empty disables
 	InternalLifetime  time.Duration
 	NtfyURL           string // default ntfy topic URL for notify hooks
 	BaseURL           string // used in notification links
@@ -57,6 +60,9 @@ func Load() (*Config, error) {
 		StepCAProvisioner: env("PORTAL_STEPCA_PROVISIONER", "pki-portal"),
 		StepCAPassword:    secret("PORTAL_STEPCA_PASSWORD"),
 		StepCADial:        os.Getenv("PORTAL_STEPCA_DIAL"),
+		ClientProvisioner: os.Getenv("PORTAL_STEPCA_CLIENT_PROVISIONER"),
+		ClientEmailDomain: env("PORTAL_CLIENT_EMAIL_DOMAIN", "ad.wilsonfi.dev"),
+		GitOpsNamespace:   os.Getenv("PORTAL_GITOPS_NAMESPACE"),
 
 		SemaphoreURL:   os.Getenv("PORTAL_SEMAPHORE_URL"),
 		SemaphoreToken: secret("PORTAL_SEMAPHORE_TOKEN"),

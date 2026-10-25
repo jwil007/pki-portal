@@ -16,6 +16,7 @@ import (
 	"github.com/jwil007/pki-portal/internal/csrutil"
 	"github.com/jwil007/pki-portal/internal/formats"
 	"github.com/jwil007/pki-portal/internal/hooks"
+	"github.com/jwil007/pki-portal/internal/internalca"
 	"github.com/jwil007/pki-portal/internal/kube"
 	"github.com/jwil007/pki-portal/internal/policy"
 )
@@ -195,7 +196,7 @@ func (s *Server) issue(r *http.Request, id string, f issueForm, mode kube.Mode, 
 	ctx := r.Context()
 	if !f.Public {
 		// Internal: step-ca signs immediately, no ACME or DNS involved.
-		key, err := s.internal.Issue(ctx, id, f.Names, f.KeyType, mode)
+		key, err := s.internal.IssueServer(ctx, id, f.Names, f.KeyType, mode)
 		if err == nil && mode == kube.Unmanaged {
 			s.stash.Put(id, key)
 		}
@@ -329,7 +330,9 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]any{"Cert": c, "Formats": formats.All, "Internal": c.Backend == kube.BackendStepCA || !c.Public,
-		"Hooks": s.hookViews(c.ID), "Drivers": hooks.All(), "BaseURL": s.cfg.BaseURL}
+		"Hooks": s.hookViews(c.ID), "Drivers": hooks.All(), "BaseURL": s.cfg.BaseURL,
+		"CanRevoke": c.Backend == kube.BackendStepCA && c.Leaf != nil && c.State != kube.Revoked && s.internal != nil,
+		"Reasons":   internalca.Reasons}
 	switch c.Mode {
 	case kube.Managed:
 		data["HasKey"] = c.Leaf != nil
@@ -369,6 +372,9 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 
 // keyFor returns the private key: from the Secret (managed) or memory (unmanaged).
 func (s *Server) keyFor(r *http.Request, c *kube.Cert) (crypto.Signer, error) {
+	if c.State == kube.Revoked {
+		return nil, errors.New("this certificate is revoked; its key was discarded")
+	}
 	switch c.Mode {
 	case kube.Managed:
 		return s.kube.Key(r.Context(), c)
@@ -480,7 +486,7 @@ func (s *Server) caPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadGateway, err)
 		return
 	}
-	s.render(w, r, "ca", map[string]any{"CAs": []map[string]any{
+	s.render(w, r, "ca", map[string]any{"CRL": s.crlInfo(r), "CAs": []map[string]any{
 		{"Label": "Root CA", "File": "root", "Cert": root, "FP": (&kube.Cert{Leaf: root}).Fingerprint()},
 		{"Label": "Intermediate (issuing) CA", "File": "intermediate", "Cert": inter, "FP": (&kube.Cert{Leaf: inter}).Fingerprint()},
 	}})

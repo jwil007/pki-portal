@@ -58,6 +58,9 @@ All settings are environment variables.
 | `PORTAL_STEPCA_PASSWORD` | (empty: internal certs disabled) | provisioner key password |
 | `PORTAL_STEPCA_DIAL` | | `host:port` to connect to instead, e.g. the LB `10.0.50.205:443` from a laptop |
 | `PORTAL_INTERNAL_LIFETIME` | provisioner default (1 year) | |
+| `PORTAL_STEPCA_CLIENT_PROVISIONER` | (empty: client certs disabled) | JWK provisioner for EAP-TLS user/device certs, same password |
+| `PORTAL_CLIENT_EMAIL_DOMAIN` | `ad.wilsonfi.dev` | default email/UPN domain for user certs |
+| `PORTAL_GITOPS_NAMESPACE` | (empty: disabled) | show this namespace's cert-manager Certificates read-only |
 | `PORTAL_IP_RANGES` | RFC 1918 ranges | allowed IP SANs |
 | `PORTAL_DOMAINS` | `wilsonfi.dev,wilsonfi.com` | |
 | `PORTAL_PUBLIC_DOMAINS` | `wilsonfi.dev` | |
@@ -117,6 +120,31 @@ only secret it holds is that password. The provisioner entry in step-ca's
 Create the key with `step crypto jwk create pub.json priv.json --kty EC --crv P-256`
 and get the `encryptedKey` from `step crypto jose format < priv.json`.
 
+## Client certificates (EAP-TLS)
+
+**Client certs** issues User certs (CN = AD username, email SAN =
+`username@PORTAL_CLIENT_EMAIL_DOMAIN`) or Device certs (CN and DNS SAN = the
+hostname) through a second JWK provisioner, `pki-portal-clients`. It's separate
+because step-ca's name policy also checks the CN, and a bare username like
+`testuser` can't match a DNS rule. The portal enforces the naming rules
+for it instead. Both profiles get serverAuth + clientAuth (step-ca's default template).
+
+## Revocation
+
+Certificates signed directly by step-ca can be revoked with a reason. step-ca
+revocation is passive: the serial goes on step-ca's CRL (with `crl.enabled` in
+`ca.json`) at `https://ca.wilsonfi.dev/1.0/crl`, and relying parties such as
+ClearPass must fetch that CRL to notice. step-ca has no OCSP. A revoked cert's
+stored key is wiped and it stops renewing. Let's Encrypt certs are handled
+with "Delete and stop renewing".
+
+## GitOps view
+
+With `PORTAL_GITOPS_NAMESPACE=pki`, the GitOps page shows that namespace's
+Certificates (e.g. ClearPass) read-only: status, expiry, a "renewed since your
+last download" flag, the cert-manager-built `keystore.p12`, and the p12
+passphrase (audited). The portal needs `get` on those Secrets by name only.
+
 ## Delivery hooks
 
 Each certificate can have any number of hooks. The portal checks every minute
@@ -170,6 +198,19 @@ when a driver calls it. No vendor drivers ship yet.
 - `pki_portal_up`
 
 Example alert: `pki_portal_certificate_expiry_timestamp_seconds - time() < 14*86400`.
+
+## Editing step-ca's values safely
+
+`hack/stepca-values` edits the step-certificates Helm values held in a Secret.
+Pipe it between `sops -d` and `sops encrypt`. It parses and writes YAML with
+`sigs.k8s.io/yaml`, the library Helm uses, so it can't reintroduce YAML 1.1
+surprises (a bare `y:` JWK key parsed as `true` once took step-ca down). It
+refuses to write output with an EC key missing `x`/`y`.
+
+```sh
+sops -d infra/pki/step-ca-values.sops.yaml \
+  | go run ./hack/stepca-values -diff -add-provisioner clients.json -set-crl crl.json
+```
 
 ## Releases
 

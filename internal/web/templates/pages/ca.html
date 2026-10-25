@@ -12,5 +12,20 @@
   <div class="downloads"><a class="button" href="/ca/{{.File}}.crt">PEM (.crt)</a><a class="button" href="/ca/{{.File}}.der">DER (.der)</a></div>
 </section>
 {{end}}
+<section class="card">
+  <h2>Revocation list (CRL)</h2>
+  {{with .CRL}}
+  {{if .Enabled}}
+  <table class="kv">
+    <tr><th>URL for devices</th><td><code>https://ca.wilsonfi.dev/1.0/crl</code> (DER)</td></tr>
+    <tr><th>Revoked certs</th><td>{{.Revoked}}</td></tr>
+    <tr><th>Updated</th><td>{{.ThisUpdate}}, next by {{.NextUpdate}}</td></tr>
+  </table>
+  <div class="downloads"><a class="button" href="/crl">Download CRL</a></div>
+  <p class="muted small">step-ca revocation is passive: a revoked cert keeps working until the relying party (e.g. ClearPass) checks this CRL. Configure ClearPass to fetch it, or keep lifetimes short.</p>
+  {{else if .Error}}<p class="msg err">{{.Error}}</p>
+  {{else}}<p class="muted">CRL generation isn't enabled on step-ca, so revoking a cert only stops renewal; nothing tells relying parties.</p>{{end}}
+  {{end}}
+</section>
 <section class="card"><h2>Bundle</h2><div class="downloads"><a class="button" href="/ca/bundle.crt">Intermediate + root (PEM)</a></div></section>
 {{end}}

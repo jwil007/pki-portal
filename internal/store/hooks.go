@@ -146,3 +146,31 @@ func (s *Store) DeleteHooksFor(certID string) error {
 	_, err := s.db.Exec(`DELETE FROM hooks WHERE cert_id = ?`, certID)
 	return err
 }
+
+// GitOps download tracking: which serial of a Git-managed certificate was last
+// downloaded, so the UI can flag "renewed since your last download".
+
+func migrateGitOps(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS gitops_downloads (
+		cert TEXT PRIMARY KEY,
+		serial TEXT NOT NULL,
+		at INTEGER NOT NULL
+	)`)
+	return err
+}
+
+func (s *Store) RecordGitOpsDownload(cert, serial string) error {
+	_, err := s.db.Exec(`INSERT INTO gitops_downloads (cert, serial, at) VALUES (?, ?, ?)
+		ON CONFLICT(cert) DO UPDATE SET serial = excluded.serial, at = excluded.at`, cert, serial, time.Now().Unix())
+	return err
+}
+
+// LastGitOpsDownload returns the serial and time of the last download, if any.
+func (s *Store) LastGitOpsDownload(cert string) (string, time.Time) {
+	var serial string
+	var at int64
+	if err := s.db.QueryRow(`SELECT serial, at FROM gitops_downloads WHERE cert = ?`, cert).Scan(&serial, &at); err != nil {
+		return "", time.Time{}
+	}
+	return serial, time.Unix(at, 0)
+}

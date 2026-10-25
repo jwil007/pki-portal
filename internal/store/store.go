@@ -39,6 +39,9 @@ func Open(path string) (*Store, error) {
 	if err := migrateHooks(db); err != nil {
 		return nil, err
 	}
+	if err := migrateGitOps(db); err != nil {
+		return nil, err
+	}
 	return &Store{db}, nil
 }
 

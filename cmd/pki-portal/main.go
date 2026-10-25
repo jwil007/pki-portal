@@ -68,7 +68,11 @@ func run(log *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		internal = internalca.New(k, ca, cfg.InternalLifetime)
+		var clients *stepca.Client
+		if cfg.ClientProvisioner != "" {
+			clients = ca.WithProvisioner(cfg.ClientProvisioner)
+		}
+		internal = internalca.New(k, ca, clients, cfg.InternalLifetime)
 	} else {
 		log.Warn("PORTAL_STEPCA_PASSWORD not set: internal certificates are disabled")
 	}

@@ -102,3 +102,6 @@ pre.copy.small { user-select: text; }
 .nowrap { white-space: nowrap; }
 .addhook summary { cursor: pointer; color: var(--accent); margin-top: 0.75rem; }
 .addhook form { margin-top: 0.75rem; }
+.revoke { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.revoke select, .revoke input { width: auto; }
+.badge.revoked { background: var(--err-bg); color: var(--err); }

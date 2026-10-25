@@ -56,6 +56,7 @@ const (
 	Issuing State = "issuing"
 	Failed  State = "failed"
 	Expired State = "expired"
+	Revoked State = "revoked"
 )
 
 // Cert is the portal's view of one certificate, whatever object backs it.
@@ -73,8 +74,12 @@ type Cert struct {
 	Revision    int
 	RenewalTime time.Time
 	RenewedAt   time.Time
-	Leaf        *x509.Certificate
-	Chain       []*x509.Certificate // intermediates, as returned by the issuer
+	Profile     string // server | user | device (step-ca certs)
+
+	RevokedAt     time.Time
+	RevokedReason string
+	Leaf          *x509.Certificate
+	Chain         []*x509.Certificate // intermediates, as returned by the issuer
 }
 
 func (c *Cert) Fingerprint() string {
@@ -594,7 +599,7 @@ func (k *Kube) Issuers(ctx context.Context, names ...string) []IssuerStatus {
 func FindDuplicate(certs []*Cert, issuer string, names []string) *Cert {
 	want := slices.Sorted(slices.Values(names))
 	for _, c := range certs {
-		if c.Issuer != issuer || c.State == Expired || c.State == Failed {
+		if c.Issuer != issuer || c.State == Expired || c.State == Failed || c.State == Revoked {
 			continue
 		}
 		if slices.Equal(slices.Sorted(slices.Values(c.Names)), want) {

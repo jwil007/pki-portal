@@ -25,3 +25,13 @@ function syncFormat() {
 }
 document.addEventListener("change", (e) => { if (e.target.id === "format") syncFormat(); });
 document.addEventListener("DOMContentLoaded", syncFormat);
+
+// Client cert form: show only the fields for the chosen profile.
+function syncProfile() {
+  const sel = document.querySelector('input[name="profile"]:checked');
+  if (!sel) return;
+  document.querySelectorAll(".for-user").forEach((el) => (el.hidden = sel.value !== "user"));
+  document.querySelectorAll(".for-device").forEach((el) => (el.hidden = sel.value !== "device"));
+}
+document.addEventListener("change", (e) => { if (e.target.name === "profile") syncProfile(); });
+document.addEventListener("DOMContentLoaded", syncProfile);
