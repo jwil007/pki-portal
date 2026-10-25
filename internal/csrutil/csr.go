@@ -109,7 +109,7 @@ func CheckKey(pub any) (string, error) {
 type KeyType string
 
 const (
-	RSA2048 KeyType = "rsa2048"
+	RSA2048  KeyType = "rsa2048"
 	ECDSA256 KeyType = "ecdsa256"
 )
 

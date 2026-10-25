@@ -19,6 +19,8 @@ import (
 	"github.com/jwil007/pki-portal/internal/web"
 )
 
+var version = "dev"
+
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log); err != nil {
@@ -72,7 +74,7 @@ func run(log *slog.Logger) error {
 		defer cancel()
 		hs.Shutdown(shutdown)
 	}()
-	log.Info("listening", "addr", cfg.Listen, "namespace", cfg.Namespace, "public_issuer", cfg.PublicIssuer, "internal_issuer", cfg.InternalIssuer)
+	log.Info("listening", "version", version, "addr", cfg.Listen, "namespace", cfg.Namespace, "public_issuer", cfg.PublicIssuer, "internal_issuer", cfg.InternalIssuer)
 	if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	acmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -155,6 +156,11 @@ func challengeStep(ch *acmev1.Challenge, public bool) Step {
 	default:
 		s.Detail = "TXT record created; waiting for the CA to validate it"
 	}
+	// cert-manager leaves the propagation message in place after its self-check
+	// passes and it has asked the CA to validate, so judge by age as well.
+	if s.State == "active" && ch.Status.Presented && !public && time.Since(ch.CreationTimestamp.Time) > 3*time.Minute {
+		s.Detail = "TXT record is published, but step-ca hasn't validated it yet. If this lasts more than a few minutes, step-ca's DNS resolver can't see the record (often a cached NXDOMAIN on an internal resolver)."
+	}
 	if s.State == "failed" && !public {
 		s.Detail += " For step-ca, check that it can resolve _acme-challenge." + strings.TrimPrefix(ch.Spec.DNSName, "*.") + " (internal DNS forwarding for the zone)."
 	}
@@ -165,6 +171,8 @@ func challengeStep(ch *acmev1.Challenge, public bool) Step {
 func Explain(msg string) string {
 	m := strings.ToLower(msg)
 	switch {
+	case strings.HasPrefix(m, "waiting on certificate issuance from order"):
+		return "Waiting for the ACME order to complete"
 	case strings.Contains(m, "propagation check failed"), strings.Contains(m, "waiting for dns-01 challenge propagation"):
 		return "DNS-01 pending: the TXT record isn't visible yet (cert-manager's self-check). This normally clears within 1–3 minutes."
 	case strings.Contains(m, "ratelimited"), strings.Contains(m, "too many certificates"), strings.Contains(m, "rate limit"):
