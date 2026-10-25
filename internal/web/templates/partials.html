@@ -3,7 +3,7 @@
 {{define "check"}}
 {{if .Error}}<p class="msg err">{{.Error}}</p>
 {{else if .Names}}
-  <p class="msg ok">✓ {{len .Names}} name{{if gt (len .Names) 1}}s{{end}} allowed, issuer <code>{{.Issuer}}</code></p>
+  <p class="msg ok">✓ {{len .Names}} name{{if gt (len .Names) 1}}s{{end}} allowed. {{if .Public}}Let's Encrypt (<code>{{.Issuer}}</code>) via DNS-01, about a minute.{{else}}Signed directly by step-ca, instantly.{{end}}</p>
   {{if .Duplicate}}<p class="msg warn">A certificate for exactly these names already exists: <a href="/certs/{{.Duplicate.ID}}">{{.Duplicate.ID}}</a> ({{.Duplicate.State}}). Issuing again {{if .Prod}}counts against Let's Encrypt's limit of 5 identical certificates per week.{{else}}creates a second copy.{{end}}
     <label class="inline"><input type="checkbox" name="confirm"> Issue another one anyway</label></p>{{end}}
 {{end}}

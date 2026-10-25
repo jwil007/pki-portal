@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 )
@@ -113,7 +114,8 @@ const (
 	ECDSA256 KeyType = "ecdsa256"
 )
 
-// Generate creates a key and a CSR for the given names. The key stays in memory.
+// Generate creates a key and a CSR for the given names (DNS names or IPs).
+// The first name becomes the CN. The key stays in memory.
 func Generate(kt KeyType, names []string) (crypto.Signer, []byte, error) {
 	var key crypto.Signer
 	var err error
@@ -126,7 +128,14 @@ func Generate(kt KeyType, names []string) (crypto.Signer, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	tmpl := &x509.CertificateRequest{DNSNames: names}
+	tmpl := &x509.CertificateRequest{}
+	for _, n := range names {
+		if ip := net.ParseIP(n); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else {
+			tmpl.DNSNames = append(tmpl.DNSNames, n)
+		}
+	}
 	if len(names) > 0 && len(names[0]) <= 64 {
 		tmpl.Subject = pkix.Name{CommonName: names[0]}
 	}
@@ -135,4 +144,23 @@ func Generate(kt KeyType, names []string) (crypto.Signer, []byte, error) {
 		return nil, nil, err
 	}
 	return key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), nil
+}
+
+// SANs returns every SAN in the CSR as strings, the form step-ca tokens use.
+func (i *Info) SANs() []string {
+	var out []string
+	out = append(out, i.DNSNames...)
+	out = append(out, i.IPs...)
+	out = append(out, i.Emails...)
+	out = append(out, i.URIs...)
+	return out
+}
+
+// KeyPEM encodes a generated key as PKCS#8 PEM.
+func KeyPEM(key crypto.Signer) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }

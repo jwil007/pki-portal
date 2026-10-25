@@ -12,3 +12,16 @@ document.addEventListener("click", (e) => {
   input.value = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
   input.select();
 });
+
+// Download form: show the password box and a hint for the selected format.
+function syncFormat() {
+  const sel = document.getElementById("format");
+  if (!sel) return;
+  const opt = sel.selectedOptions[0];
+  const needsPw = opt && opt.dataset.password === "true";
+  document.getElementById("pw-row").hidden = !needsPw;
+  document.getElementById("dlpw").required = needsPw;
+  document.getElementById("format-help").textContent = opt ? opt.dataset.help : "";
+}
+document.addEventListener("change", (e) => { if (e.target.id === "format") syncFormat(); });
+document.addEventListener("DOMContentLoaded", syncFormat);

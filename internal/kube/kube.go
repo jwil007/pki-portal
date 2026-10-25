@@ -62,6 +62,7 @@ const (
 type Cert struct {
 	ID          string
 	Mode        Mode
+	Backend     string // cert-manager | step-ca
 	Issuer      string
 	Public      bool
 	Names       []string
@@ -71,6 +72,7 @@ type Cert struct {
 	Created     time.Time
 	Revision    int
 	RenewalTime time.Time
+	RenewedAt   time.Time
 	Leaf        *x509.Certificate
 	Chain       []*x509.Certificate // intermediates, as returned by the issuer
 }
@@ -257,6 +259,11 @@ func (k *Kube) List(ctx context.Context) ([]*Cert, error) {
 	for i := range crts.Items {
 		out = append(out, fromCertificate(&crts.Items[i], tlsBySecret[crts.Items[i].Spec.SecretName]))
 	}
+	for i := range secrets.Items {
+		if secrets.Items[i].Labels[LabelBackend] == BackendStepCA {
+			out = append(out, fromSecret(&secrets.Items[i]))
+		}
+	}
 	for i := range crs.Items {
 		out = append(out, fromRequest(&crs.Items[i]))
 	}
@@ -277,6 +284,11 @@ func (k *Kube) Get(ctx context.Context, id string) (*Cert, error) {
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
+	if c, _, err := k.getSigned(ctx, id); err == nil {
+		return c, nil
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
 	cr, err := k.cm.CertmanagerV1().CertificateRequests(k.ns).Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
@@ -291,6 +303,7 @@ func fromCertificate(crt *cmapi.Certificate, tlsCrt []byte) *Cert {
 	c := &Cert{
 		ID:      crt.Name,
 		Mode:    Managed,
+		Backend: backendCertMgr,
 		Issuer:  crt.Spec.IssuerRef.Name,
 		Public:  crt.Annotations[AnnClass] == "public",
 		Names:   crt.Spec.DNSNames,
@@ -353,6 +366,7 @@ func fromRequest(cr *cmapi.CertificateRequest) *Cert {
 	c := &Cert{
 		ID:      cr.Name,
 		Mode:    Mode(cr.Labels[LabelMode]),
+		Backend: backendCertMgr,
 		Issuer:  cr.Spec.IssuerRef.Name,
 		Public:  cr.Annotations[AnnClass] == "public",
 		KeyType: cr.Annotations[AnnKeyType],
@@ -408,8 +422,15 @@ func ParseChain(data []byte) []*x509.Certificate {
 }
 
 // Key loads the private key of a managed certificate from its Secret.
-func (k *Kube) Key(ctx context.Context, id string) (crypto.Signer, error) {
-	crt, err := k.cm.CertmanagerV1().Certificates(k.ns).Get(ctx, id, metav1.GetOptions{})
+func (k *Kube) Key(ctx context.Context, c *Cert) (crypto.Signer, error) {
+	if c.Backend == BackendStepCA {
+		_, s, err := k.getSigned(ctx, c.ID)
+		if err != nil {
+			return nil, err
+		}
+		return ParseKey(s.Data["tls.key"])
+	}
+	crt, err := k.cm.CertmanagerV1().Certificates(k.ns).Get(ctx, c.ID, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +469,9 @@ func ParseKey(data []byte) (crypto.Signer, error) {
 
 // Delete removes the Certificate (and its Secret) or the CertificateRequest.
 func (k *Kube) Delete(ctx context.Context, c *Cert) error {
+	if c.Backend == BackendStepCA {
+		return k.core.CoreV1().Secrets(k.ns).Delete(ctx, c.ID, metav1.DeleteOptions{})
+	}
 	if c.Mode == Managed {
 		crt, err := k.cm.CertmanagerV1().Certificates(k.ns).Get(ctx, c.ID, metav1.GetOptions{})
 		if err != nil {

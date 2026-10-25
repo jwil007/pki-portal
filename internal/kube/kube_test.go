@@ -2,7 +2,15 @@ package kube
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"testing"
+	"time"
 
 	cmapi "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cmmeta "github.com/cert-manager/cert-manager/pkg/apis/meta/v1"
@@ -96,4 +104,55 @@ func TestExplain(t *testing.T) {
 	if got == "" || got[:12] != "DNS-01 pendi" {
 		t.Errorf("got %q", got)
 	}
+}
+
+func TestSignedSecrets(t *testing.T) {
+	ctx := context.Background()
+	k, _ := newFake()
+	root, chain := testChain(t, "nas.wilsonfi.dev")
+	if err := k.SaveSigned(ctx, "nas-x", Managed, chain, []byte("key"), root, "rsa2048", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.SaveSigned(ctx, "dev-y", FromCSR, chain, nil, root, "ecdsap-256", 1); err != nil {
+		t.Fatal(err)
+	}
+	certs, _ := k.List(ctx)
+	if len(certs) != 2 {
+		t.Fatalf("listed %d", len(certs))
+	}
+	c, err := k.Get(ctx, "nas-x")
+	if err != nil || c.Backend != BackendStepCA || c.State != Ready || c.Names[0] != "nas.wilsonfi.dev" || c.RenewalTime.IsZero() {
+		t.Fatalf("Get = %+v, %v", c, err)
+	}
+	k.RecordError(ctx, "nas-x", "step-ca down")
+	c, _ = k.Get(ctx, "nas-x")
+	if c.State != Failed {
+		t.Errorf("state after error = %s", c.State)
+	}
+	if err := k.SaveSigned(ctx, "nas-x", Managed, chain, []byte("key"), root, "rsa2048", 2); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = k.Get(ctx, "nas-x")
+	if c.State != Ready || c.Revision != 2 {
+		t.Errorf("after renewal state=%s rev=%d", c.State, c.Revision)
+	}
+	if err := k.Delete(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Get(ctx, "nas-x"); err == nil {
+		t.Error("still there after delete")
+	}
+}
+
+func testChain(t *testing.T, name string) (*x509.Certificate, []byte) {
+	t.Helper()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caT := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Root"}, IsCA: true, BasicConstraintsValid: true,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour), KeyUsage: x509.KeyUsageCertSign}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caT, caT, &caKey.PublicKey, caKey)
+	ca, _ := x509.ParseCertificate(caDER)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	lT := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, lT, ca, &key.PublicKey, caKey)
+	return ca, append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})...)
 }

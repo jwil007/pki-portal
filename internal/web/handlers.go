@@ -14,10 +14,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/jwil007/pki-portal/internal/csrutil"
+	"github.com/jwil007/pki-portal/internal/formats"
 	"github.com/jwil007/pki-portal/internal/kube"
-	"github.com/jwil007/pki-portal/internal/p12"
 	"github.com/jwil007/pki-portal/internal/policy"
 )
+
+var errInternalDisabled = errors.New("internal certificates are disabled: no step-ca provisioner password is configured (PORTAL_STEPCA_PASSWORD)")
 
 // --- dashboard & inventory ---
 
@@ -43,6 +45,14 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			renewed = append(renewed, c)
 		}
 	}
+	issuers := s.kube.Issuers(r.Context(), s.cfg.PublicIssuer)
+	st := kube.IssuerStatus{Name: kube.StepCAIssuer, Ready: true}
+	if s.internal == nil {
+		st.Ready, st.Message = false, errInternalDisabled.Error()
+	} else if err := s.internal.Health(r.Context()); err != nil {
+		st.Ready, st.Message = false, err.Error()
+	}
+	issuers = append(issuers, st)
 	s.render(w, r, "dashboard", map[string]any{
 		"Total":    len(certs),
 		"Counts":   counts,
@@ -50,7 +60,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"Expiring": expiring,
 		"Failed":   failed,
 		"Renewed":  renewed,
-		"Issuers":  s.kube.Issuers(r.Context(), s.cfg.PublicIssuer, s.cfg.InternalIssuer),
+		"Issuers":  issuers,
 	})
 }
 
@@ -105,7 +115,17 @@ func (s *Server) issuerFor(public bool) string {
 	if public {
 		return s.cfg.PublicIssuer
 	}
-	return s.cfg.InternalIssuer
+	return kube.StepCAIssuer
+}
+
+func (s *Server) checkNames(names []string, public bool) error {
+	if public {
+		return s.policy.CheckACME(names, true)
+	}
+	if s.internal == nil {
+		return errInternalDisabled
+	}
+	return s.policy.CheckInternal(names)
 }
 
 // checkResult is shown live under the names box and again on submit errors.
@@ -114,16 +134,17 @@ type checkResult struct {
 	Error     string
 	Duplicate *kube.Cert
 	Issuer    string
+	Public    bool
 	Prod      bool
 }
 
 func (s *Server) runCheck(r *http.Request, f issueForm) checkResult {
-	res := checkResult{Names: f.Names, Issuer: s.issuerFor(f.Public)}
+	res := checkResult{Names: f.Names, Issuer: s.issuerFor(f.Public), Public: f.Public}
 	res.Prod = f.Public && !strings.Contains(res.Issuer, "staging")
 	if len(f.Names) == 0 {
 		return res
 	}
-	if err := s.policy.CheckACME(f.Names, f.Public); err != nil {
+	if err := s.checkNames(f.Names, f.Public); err != nil {
 		res.Error = err.Error()
 		return res
 	}
@@ -146,8 +167,8 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	res := s.runCheck(r, f)
 	switch {
 	case len(f.Names) == 0:
-		res.Error = "Enter at least one DNS name."
-	case res.Duplicate != nil && !f.Confirm:
+		res.Error = "Enter at least one name."
+	case res.Error == "" && res.Duplicate != nil && !f.Confirm:
 		res.Error = "A certificate for exactly these names already exists. Tick the box to issue another one anyway."
 	}
 	if res.Error != "" {
@@ -156,32 +177,42 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := kube.NewID(f.Names[0])
-	ctx := r.Context()
-	var err error
-	if f.Managed {
-		err = s.kube.CreateManaged(ctx, id, f.Names, res.Issuer, f.Public, f.KeyType)
-	} else {
-		var key crypto.Signer
-		var csrPEM []byte
-		key, csrPEM, err = csrutil.Generate(csrutil.KeyType(f.KeyType), f.Names)
-		if err == nil {
-			s.stash.Put(id, key)
-			err = s.kube.CreateRequest(ctx, id, csrPEM, res.Issuer, f.Public, kube.Unmanaged, f.KeyType)
-			if err != nil {
-				s.stash.Delete(id)
-			}
-		}
-	}
-	if err != nil {
-		s.fail(w, r, http.StatusBadGateway, fmt.Errorf("creating certificate: %w", err))
-		return
-	}
-	mode := "managed"
+	mode := kube.Managed
 	if !f.Managed {
-		mode = "unmanaged"
+		mode = kube.Unmanaged
+	}
+	if err := s.issue(r, id, f, mode, res.Issuer); err != nil {
+		s.fail(w, r, http.StatusBadGateway, fmt.Errorf("issuing certificate: %w", err))
+		return
 	}
 	s.record(r, "issue", id, fmt.Sprintf("%s via %s: %s", mode, res.Issuer, strings.Join(f.Names, ", ")))
 	http.Redirect(w, r, "/certs/"+id, http.StatusSeeOther)
+}
+
+func (s *Server) issue(r *http.Request, id string, f issueForm, mode kube.Mode, issuer string) error {
+	ctx := r.Context()
+	if !f.Public {
+		// Internal: step-ca signs immediately, no ACME or DNS involved.
+		key, err := s.internal.Issue(ctx, id, f.Names, f.KeyType, mode)
+		if err == nil && mode == kube.Unmanaged {
+			s.stash.Put(id, key)
+		}
+		return err
+	}
+	if mode == kube.Managed {
+		return s.kube.CreateManaged(ctx, id, f.Names, issuer, true, f.KeyType)
+	}
+	var key crypto.Signer
+	key, csrPEM, err := csrutil.Generate(csrutil.KeyType(f.KeyType), f.Names)
+	if err != nil {
+		return err
+	}
+	s.stash.Put(id, key)
+	if err := s.kube.CreateRequest(ctx, id, csrPEM, issuer, true, kube.Unmanaged, f.KeyType); err != nil {
+		s.stash.Delete(id)
+		return err
+	}
+	return nil
 }
 
 // --- CSR upload ---
@@ -220,14 +251,26 @@ func (s *Server) evalCSR(r *http.Request) csrResult {
 		return res
 	}
 	res.Info = info
-	names, err := info.ACMENames()
-	if err == nil {
-		err = s.policy.CheckACME(names, res.Public)
+	if res.Public {
+		res.Names, err = info.ACMENames()
+		if err == nil {
+			err = s.checkNames(res.Names, true)
+		}
+	} else {
+		res.Names = info.SANs()
+		if len(res.Names) == 0 && info.CN != "" {
+			res.Names = []string{info.CN}
+		}
+		switch {
+		case len(info.Emails) > 0 || len(info.URIs) > 0:
+			err = errors.New("email and URI SANs aren't supported yet")
+		default:
+			err = s.checkNames(res.Names, false)
+		}
 	}
 	if err != nil {
 		res.Error = err.Error()
 	}
-	res.Names = names
 	return res
 }
 
@@ -248,8 +291,14 @@ func (s *Server) csrSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	id := kube.NewID(res.Names[0])
 	keyDesc := strings.ToLower(strings.ReplaceAll(res.Info.Key, " ", ""))
-	if err := s.kube.CreateRequest(r.Context(), id, res.Info.PEM, res.Issuer, res.Public, kube.FromCSR, keyDesc); err != nil {
-		s.fail(w, r, http.StatusBadGateway, fmt.Errorf("creating certificate request: %w", err))
+	var err error
+	if res.Public {
+		err = s.kube.CreateRequest(r.Context(), id, res.Info.PEM, res.Issuer, true, kube.FromCSR, keyDesc)
+	} else {
+		err = s.internal.SignCSR(r.Context(), id, res.Info, keyDesc)
+	}
+	if err != nil {
+		s.fail(w, r, http.StatusBadGateway, fmt.Errorf("issuing from CSR: %w", err))
 		return
 	}
 	s.record(r, "issue", id, fmt.Sprintf("csr via %s: %s", res.Issuer, strings.Join(res.Names, ", ")))
@@ -276,18 +325,20 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data := map[string]any{"Cert": c}
-	if c.Mode == kube.Managed {
-		data["History"], _ = s.kube.History(r.Context(), c.ID)
+	data := map[string]any{"Cert": c, "Formats": formats.All, "Internal": c.Backend == kube.BackendStepCA || !c.Public}
+	switch c.Mode {
+	case kube.Managed:
 		data["HasKey"] = c.Leaf != nil
-	}
-	if c.Mode == kube.Unmanaged {
+		if c.Backend != kube.BackendStepCA {
+			data["History"], _ = s.kube.History(r.Context(), c.ID)
+		}
+	case kube.Unmanaged:
 		_, until, ok := s.stash.Get(c.ID)
 		data["HasKey"] = ok && c.Leaf != nil
 		data["KeyAvailable"] = ok
 		data["KeyUntil"] = until
 	}
-	if c.State != kube.Ready && c.State != kube.Expired {
+	if c.Backend != kube.BackendStepCA && c.State != kube.Ready && c.State != kube.Expired {
 		data["Steps"], _ = s.kube.Progress(r.Context(), c)
 	}
 	s.render(w, r, "cert", data)
@@ -312,50 +363,11 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 
 // --- downloads ---
 
-func filename(c *kube.Cert, ext string) string {
-	base := c.ID
-	if len(c.Names) > 0 {
-		base = strings.ReplaceAll(c.Names[0], "*", "wildcard")
-	}
-	return base + ext
-}
-
-func attach(w http.ResponseWriter, name, ctype string, body []byte) {
-	w.Header().Set("Content-Type", ctype)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
-	w.Header().Set("Cache-Control", "no-store")
-	w.Write(body)
-}
-
-func pemCerts(certs ...*x509.Certificate) []byte {
-	var out []byte
-	for _, c := range certs {
-		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
-	}
-	return out
-}
-
-func (s *Server) downloadCert(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.getCert(w, r)
-	if !ok {
-		return
-	}
-	if c.Leaf == nil {
-		s.fail(w, r, http.StatusConflict, errors.New("certificate not issued yet"))
-		return
-	}
-	if strings.HasSuffix(r.URL.Path, "/fullchain.pem") {
-		attach(w, filename(c, ".fullchain.pem"), "application/x-pem-file", pemCerts(append([]*x509.Certificate{c.Leaf}, c.Chain...)...))
-		return
-	}
-	attach(w, filename(c, ".crt"), "application/x-pem-file", pemCerts(c.Leaf))
-}
-
 // keyFor returns the private key: from the Secret (managed) or memory (unmanaged).
 func (s *Server) keyFor(r *http.Request, c *kube.Cert) (crypto.Signer, error) {
 	switch c.Mode {
 	case kube.Managed:
-		return s.kube.Key(r.Context(), c.ID)
+		return s.kube.Key(r.Context(), c)
 	case kube.Unmanaged:
 		if k, _, ok := s.stash.Get(c.ID); ok {
 			return k, nil
@@ -365,62 +377,50 @@ func (s *Server) keyFor(r *http.Request, c *kube.Cert) (crypto.Signer, error) {
 	return nil, errors.New("this certificate was issued from your CSR; the private key never left your device")
 }
 
-func (s *Server) downloadKey(w http.ResponseWriter, r *http.Request) {
+func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	c, ok := s.getCert(w, r)
 	if !ok {
 		return
 	}
-	key, err := s.keyFor(r, c)
-	if err != nil {
-		s.fail(w, r, http.StatusConflict, err)
-		return
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, err)
-		return
-	}
-	s.record(r, "download-key", c.ID, "")
-	attach(w, filename(c, ".key"), "application/x-pem-file", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-}
-
-func (s *Server) downloadP12(w http.ResponseWriter, r *http.Request) {
-	c, ok := s.getCert(w, r)
+	f, ok := formats.Lookup(r.FormValue("format"))
 	if !ok {
+		s.fail(w, r, http.StatusBadRequest, errors.New("choose a file format"))
 		return
 	}
-	if c.Leaf == nil {
-		s.fail(w, r, http.StatusConflict, errors.New("certificate not issued yet"))
-		return
+	b := formats.Bundle{Leaf: c.Leaf, Chain: c.Chain, Name: c.ID}
+	if len(c.Names) > 0 {
+		b.Name = strings.ReplaceAll(c.Names[0], "*", "wildcard")
 	}
-	key, err := s.keyFor(r, c)
-	if err != nil {
-		s.fail(w, r, http.StatusConflict, err)
-		return
-	}
-	password := r.FormValue("password")
-	if len(password) < 4 {
-		s.fail(w, r, http.StatusBadRequest, errors.New("p12 password must be at least 4 characters (use Generate for a random one)"))
-		return
-	}
-	chain := c.Chain
-	if r.FormValue("root") == "on" && !c.Public {
-		if root, _, err := s.kube.CA(r.Context(), s.cfg.CAConfigMap); err == nil {
-			chain = append(chain, root)
+	if f.Key {
+		key, err := s.keyFor(r, c)
+		if err != nil {
+			s.fail(w, r, http.StatusConflict, err)
+			return
 		}
+		b.Key = key
 	}
-	legacy := r.FormValue("encoding") != "modern"
-	data, err := p12.Encode(key, c.Leaf, chain, password, legacy)
+	if r.FormValue("root") == "on" && !c.Public {
+		root, _, err := s.kube.CA(r.Context(), s.cfg.CAConfigMap)
+		if err != nil {
+			s.fail(w, r, http.StatusBadGateway, err)
+			return
+		}
+		b.Root = root
+	}
+	out, err := formats.Render(f.ID, b, r.FormValue("password"))
 	if err != nil {
-		s.fail(w, r, http.StatusInternalServerError, err)
+		s.fail(w, r, http.StatusBadRequest, err)
 		return
 	}
-	enc := "legacy"
-	if !legacy {
-		enc = "modern"
+	if f.Key {
+		s.record(r, "download-key", c.ID, f.ID)
+	} else {
+		s.record(r, "download", c.ID, f.ID)
 	}
-	s.record(r, "download-p12", c.ID, enc)
-	attach(w, filename(c, ".p12"), "application/x-pkcs12", data)
+	w.Header().Set("Content-Type", out.ContentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", out.Filename))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(out.Data)
 }
 
 // --- actions ---
@@ -434,7 +434,17 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadRequest, errors.New("only managed certificates can be renewed; issue a new one instead"))
 		return
 	}
-	if err := s.kube.Renew(r.Context(), c.ID); err != nil {
+	var err error
+	if c.Backend == kube.BackendStepCA {
+		if s.internal == nil {
+			err = errInternalDisabled
+		} else {
+			err = s.internal.Renew(r.Context(), c)
+		}
+	} else {
+		err = s.kube.Renew(r.Context(), c.ID)
+	}
+	if err != nil {
 		s.fail(w, r, http.StatusConflict, err)
 		return
 	}
@@ -476,20 +486,26 @@ func (s *Server) caFile(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, http.StatusBadGateway, err)
 		return
 	}
-	switch f := r.PathValue("file"); f {
+	var name string
+	var data []byte
+	switch r.PathValue("file") {
 	case "root.crt":
-		attach(w, "wilsonfi-root-ca.crt", "application/x-x509-ca-cert", pemCerts(root))
+		name, data = "wilsonfi-root-ca.crt", pemCert(root)
 	case "root.der":
-		attach(w, "wilsonfi-root-ca.der", "application/x-x509-ca-cert", root.Raw)
+		name, data = "wilsonfi-root-ca.der", root.Raw
 	case "intermediate.crt":
-		attach(w, "wilsonfi-intermediate-ca.crt", "application/x-x509-ca-cert", pemCerts(inter))
+		name, data = "wilsonfi-intermediate-ca.crt", pemCert(inter)
 	case "intermediate.der":
-		attach(w, "wilsonfi-intermediate-ca.der", "application/x-x509-ca-cert", inter.Raw)
+		name, data = "wilsonfi-intermediate-ca.der", inter.Raw
 	case "bundle.crt":
-		attach(w, "wilsonfi-ca-bundle.crt", "application/x-x509-ca-cert", pemCerts(inter, root))
+		name, data = "wilsonfi-ca-bundle.crt", append(pemCert(inter), pemCert(root)...)
 	default:
 		http.NotFound(w, r)
+		return
 	}
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	w.Write(data)
 }
 
 func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
@@ -500,4 +516,8 @@ func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, "audit", map[string]any{"Events": events, "Q": q})
+}
+
+func pemCert(c *x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
 }

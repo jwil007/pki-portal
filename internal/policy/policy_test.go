@@ -37,3 +37,17 @@ func TestSplitNames(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestCheckInternal(t *testing.T) {
+	r, _ := ParseRanges([]string{"10.0.0.0/8"})
+	p := Policy{Domains: []string{"wilsonfi.dev"}, IPRanges: r}
+	if err := p.CheckInternal([]string{"nas.wilsonfi.dev", "10.0.10.5"}); err != nil {
+		t.Error(err)
+	}
+	if err := p.CheckInternal([]string{"192.168.1.1"}); err == nil {
+		t.Error("out-of-range IP accepted")
+	}
+	if err := p.CheckInternal([]string{"nas.example.com"}); err == nil {
+		t.Error("foreign domain accepted")
+	}
+}

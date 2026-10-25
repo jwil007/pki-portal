@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jwil007/pki-portal/internal/config"
+	"github.com/jwil007/pki-portal/internal/internalca"
 	"github.com/jwil007/pki-portal/internal/keystash"
 	"github.com/jwil007/pki-portal/internal/kube"
 	"github.com/jwil007/pki-portal/internal/policy"
@@ -38,14 +39,19 @@ type Server struct {
 	kube       *kube.Kube
 	store      *store.Store
 	stash      *keystash.Stash
+	internal   *internalca.Issuer // nil when no step-ca provisioner is configured
 	policy     policy.Policy
 	sessionKey []byte
 	pages      map[string]*template.Template
 	log        *slog.Logger
 }
 
-func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stash, log *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stash, internal *internalca.Issuer, log *slog.Logger) (*Server, error) {
 	key, err := loadSessionKey(filepath.Join(cfg.DataDir, "session.key"))
+	if err != nil {
+		return nil, err
+	}
+	ranges, err := policy.ParseRanges(cfg.IPRanges)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +60,8 @@ func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stas
 		kube:       k,
 		store:      st,
 		stash:      stash,
-		policy:     policy.Policy{Domains: cfg.Domains, PublicDomains: cfg.PublicDomains},
+		internal:   internal,
+		policy:     policy.Policy{Domains: cfg.Domains, PublicDomains: cfg.PublicDomains, IPRanges: ranges},
 		sessionKey: key,
 		log:        log,
 	}
@@ -147,10 +154,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /csr", s.csrSubmit)
 	auth.HandleFunc("GET /certs/{id}", s.detail)
 	auth.HandleFunc("GET /certs/{id}/progress", s.progress)
-	auth.HandleFunc("GET /certs/{id}/cert.pem", s.downloadCert)
-	auth.HandleFunc("GET /certs/{id}/fullchain.pem", s.downloadCert)
-	auth.HandleFunc("POST /certs/{id}/key.pem", s.downloadKey)
-	auth.HandleFunc("POST /certs/{id}/p12", s.downloadP12)
+	auth.HandleFunc("POST /certs/{id}/download", s.download)
 	auth.HandleFunc("POST /certs/{id}/renew", s.renew)
 	auth.HandleFunc("POST /certs/{id}/delete", s.delete)
 	auth.HandleFunc("GET /ca", s.caPage)
@@ -275,6 +279,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, dat
 	data["Path"] = r.URL.Path
 	data["PublicIssuer"] = s.cfg.PublicIssuer
 	data["Staging"] = strings.Contains(s.cfg.PublicIssuer, "staging")
+	data["InternalEnabled"] = s.internal != nil
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		s.log.Error("render", "page", page, "err", err)

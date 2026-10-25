@@ -4,12 +4,12 @@
   <fieldset>
     <legend>1. Type</legend>
     <label class="choice"><input type="radio" name="type" value="public" {{if .Form.Public}}checked{{end}}> <b>Public</b> <span>Let's Encrypt (<code>{{.PublicIssuer}}</code>), trusted everywhere</span></label>
-    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Form.Public}}checked{{end}}> <b>Internal</b> <span>Your step-ca, trusted by devices that have the Wilsonfi root</span></label>
+    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Form.Public}}checked{{end}} {{if not .InternalEnabled}}disabled{{end}}> <b>Internal</b> <span>Signed instantly by your step-ca. No DNS records needed, IP addresses allowed. Trusted by devices that have the Wilsonfi root.{{if not .InternalEnabled}} <em>(not configured)</em>{{end}}</span></label>
   </fieldset>
   <fieldset>
     <legend>2. Names</legend>
     <textarea id="names" name="names" rows="3" placeholder="fw.wilsonfi.dev&#10;vpn.wilsonfi.dev" required>{{.Form.Raw}}</textarea>
-    <p class="muted small">One per line or comma-separated. The first name becomes the CN.</p>
+    <p class="muted small">One per line or comma-separated. The first name becomes the CN. Internal certs can also include IP addresses.</p>
     <div id="check">{{with .Check}}{{template "check" .}}{{end}}</div>
   </fieldset>
   <fieldset>

@@ -12,6 +12,59 @@ import (
 type Policy struct {
 	Domains       []string
 	PublicDomains []string
+	IPRanges      []*net.IPNet // allowed IP SANs (internal certs only)
+}
+
+// ParseRanges parses a list of CIDRs.
+func ParseRanges(cidrs []string) ([]*net.IPNet, error) {
+	var out []*net.IPNet
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(strings.TrimSpace(c))
+		if err != nil {
+			return nil, fmt.Errorf("bad IP range %q: %w", c, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// SplitHosts separates IP addresses from DNS names.
+func SplitHosts(names []string) (dns []string, ips []net.IP) {
+	for _, n := range names {
+		if ip := net.ParseIP(n); ip != nil {
+			ips = append(ips, ip)
+		} else {
+			dns = append(dns, n)
+		}
+	}
+	return dns, ips
+}
+
+// CheckInternal validates names for a certificate signed directly by step-ca:
+// DNS names under the allowed domains (no public DNS needed) and IPs in range.
+func (p Policy) CheckInternal(names []string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("at least one name or IP address is required")
+	}
+	if len(names) > maxNames {
+		return fmt.Errorf("too many names (%d, max %d)", len(names), maxNames)
+	}
+	dns, ips := SplitHosts(names)
+	for _, n := range dns {
+		if err := p.CheckDNS(n, false); err != nil {
+			return err
+		}
+	}
+	for _, ip := range ips {
+		ok := false
+		for _, r := range p.IPRanges {
+			ok = ok || r.Contains(ip)
+		}
+		if !ok {
+			return fmt.Errorf("%s: IP address not in an allowed range", ip)
+		}
+	}
+	return nil
 }
 
 const maxNames = 50
@@ -48,7 +101,7 @@ func (p Policy) CheckACME(names []string, public bool) error {
 	}
 	for _, n := range names {
 		if net.ParseIP(n) != nil {
-			return fmt.Errorf("%s: IP addresses can't be issued over ACME", n)
+			return fmt.Errorf("%s: IP addresses are only allowed on internal certificates", n)
 		}
 		if err := p.CheckDNS(n, public); err != nil {
 			return err

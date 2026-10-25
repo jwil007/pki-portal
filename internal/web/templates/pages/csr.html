@@ -5,7 +5,7 @@
   <fieldset>
     <legend>Issuer</legend>
     <label class="choice"><input type="radio" name="type" value="public" {{if .Public}}checked{{end}}> <b>Public</b> <span><code>{{.PublicIssuer}}</code></span></label>
-    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Public}}checked{{end}}> <b>Internal</b> <span>step-ca</span></label>
+    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Public}}checked{{end}} {{if not .InternalEnabled}}disabled{{end}}> <b>Internal</b> <span>Signed directly by step-ca; IP SANs allowed</span></label>
   </fieldset>
   <fieldset>
     <legend>CSR</legend>

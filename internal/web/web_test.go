@@ -28,7 +28,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	dir := t.TempDir()
 	cfg := &config.Config{
 		Password: "hunter22", DataDir: dir, Namespace: "pki-managed",
-		PublicIssuer: "letsencrypt-staging", InternalIssuer: "step-ca-acme",
+		PublicIssuer: "letsencrypt-staging",
 		Domains: []string{"wilsonfi.dev"}, PublicDomains: []string{"wilsonfi.dev"},
 		CAConfigMap: "pki/step-certificates-certs", InsecureCookie: true,
 	}
@@ -38,7 +38,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	}
 	core := fake.NewClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "pki", Name: "step-certificates-certs"}})
 	k := kube.NewWithClients("pki-managed", core, cmfake.NewClientset())
-	srv, err := New(cfg, k, st, keystash.New(time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := New(cfg, k, st, keystash.New(time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,5 +113,14 @@ func TestCrossOriginPostRejected(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("cross-site POST status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestInternalDisabledWithoutProvisioner(t *testing.T) {
+	ts, c := newTestServer(t)
+	c.PostForm(ts.URL+"/login", url.Values{"password": {"hunter22"}})
+	resp, _ := c.PostForm(ts.URL+"/certs/check", url.Values{"type": {"internal"}, "names": {"nas.wilsonfi.dev"}})
+	if b := body(t, resp); !strings.Contains(b, "internal certificates are disabled") {
+		t.Errorf("check = %s", b)
 	}
 }

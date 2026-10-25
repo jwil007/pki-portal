@@ -93,3 +93,6 @@ table { border-collapse: collapse; width: 100%; }
 .steps li.failed::before { content: "✕"; color: var(--err); }
 .steps li.failed span { color: var(--err); }
 @media (max-width: 640px) { .steps li { grid-template-columns: 1.5rem 1fr; } .steps li span { grid-column: 2; } }
+.dl { display: grid; gap: 0.5rem; max-width: 560px; }
+.dl select { margin-top: 0.25rem; }
+[hidden] { display: none !important; }
