@@ -187,7 +187,7 @@ func Render(id string, b Bundle, password string) (*Output, error) {
 			}{"root.crt", pemCerts(b.Root)})
 		}
 		for _, f := range files {
-			w, err := zw.Create(b.Name + "/" + f.name)
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: b.Name + "/" + f.name, Method: zip.Deflate, Modified: b.Leaf.NotBefore})
 			if err != nil {
 				return nil, err
 			}
