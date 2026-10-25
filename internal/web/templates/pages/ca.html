@@ -1,0 +1,16 @@
+{{define "content"}}
+<h1>CA chain</h1>
+<p class="muted">Install the root on devices that need to trust internal certificates. These are PEM (.crt) and DER only, never PKCS#7, because ClearPass rejects PKCS#7.</p>
+{{range .CAs}}
+<section class="card">
+  <h2>{{.Label}}</h2>
+  <table class="kv">
+    <tr><th>Subject</th><td>{{.Cert.Subject}}</td></tr>
+    <tr><th>Valid</th><td>{{day .Cert.NotBefore}} → {{day .Cert.NotAfter}}</td></tr>
+    <tr><th>SHA-256</th><td class="mono small">{{fp .FP}}</td></tr>
+  </table>
+  <div class="downloads"><a class="button" href="/ca/{{.File}}.crt">PEM (.crt)</a><a class="button" href="/ca/{{.File}}.der">DER (.der)</a></div>
+</section>
+{{end}}
+<section class="card"><h2>Bundle</h2><div class="downloads"><a class="button" href="/ca/bundle.crt">Intermediate + root (PEM)</a></div></section>
+{{end}}

@@ -1,0 +1,74 @@
+{{define "content"}}
+{{with .Cert}}
+<div class="head">
+  <h1>{{index .Names 0}}</h1>
+  {{template "state" .State}}
+</div>
+<p class="muted">{{.Mode}} · {{.Class}} · <code>{{.Issuer}}</code> · <code>{{.ID}}</code></p>
+{{end}}
+
+{{if .Steps}}
+<section class="card">
+  <h2>Issuance progress</h2>
+  <div hx-get="/certs/{{.Cert.ID}}/progress" hx-trigger="every 3s" hx-swap="innerHTML">{{template "progress" .}}</div>
+</section>
+{{end}}
+
+{{with .Cert}}{{if .Leaf}}
+<section class="card">
+  <h2>Download</h2>
+  <div class="downloads">
+    <a class="button" href="/certs/{{.ID}}/cert.pem">Certificate (PEM)</a>
+    <a class="button" href="/certs/{{.ID}}/fullchain.pem">Full chain (PEM)</a>
+    {{if $.HasKey}}<form method="post" action="/certs/{{.ID}}/key.pem"><button>Private key (PEM)</button></form>{{end}}
+  </div>
+  {{if eq .Mode "unmanaged"}}{{if $.KeyAvailable}}<p class="msg warn">The private key is held in memory only until {{date $.KeyUntil}}. Download it now; it can't be recovered later.</p>{{else}}<p class="msg err">The private key has been discarded. Download the certificate only, or issue a new one.</p>{{end}}{{end}}
+  {{if eq .Mode "csr"}}<p class="muted small">Issued from your CSR, so the portal never had the private key.</p>{{end}}
+  {{if $.HasKey}}
+  <form class="p12" method="post" action="/certs/{{.ID}}/p12">
+    <h3>PKCS#12 (.p12)</h3>
+    <label>Password <span class="row"><input type="text" name="password" id="p12pw" minlength="4" required autocomplete="off"><button type="button" data-generate="p12pw">Generate</button></span></label>
+    <p class="muted small">Not stored anywhere. Copy it before downloading.</p>
+    <label class="choice"><input type="radio" name="encoding" value="legacy" checked> <b>Legacy</b> <span>3DES / SHA-1, for ClearPass, Windows Server 2016 and older, and most appliances</span></label>
+    <label class="choice"><input type="radio" name="encoding" value="modern"> <b>Modern</b> <span>AES-256 / PBKDF2, for current OSes, OpenSSL 3 and Java</span></label>
+    {{if not .Public}}<label class="inline"><input type="checkbox" name="root" checked> Include the root CA</label>{{end}}
+    <button class="primary">Download .p12</button>
+  </form>
+  {{end}}
+</section>
+
+<section class="card">
+  <h2>Details</h2>
+  <table class="kv">
+    <tr><th>Subject</th><td>{{.Leaf.Subject}}</td></tr>
+    <tr><th>DNS names</th><td>{{join .Leaf.DNSNames ", "}}</td></tr>
+    <tr><th>Issuer</th><td>{{.Leaf.Issuer}}</td></tr>
+    <tr><th>Serial</th><td class="mono">{{.Serial}}</td></tr>
+    <tr><th>SHA-256</th><td class="mono small">{{fp .Fingerprint}}</td></tr>
+    <tr><th>Valid</th><td>{{date .Leaf.NotBefore}} → {{date .Leaf.NotAfter}} ({{.DaysLeft}} days left)</td></tr>
+    {{if eq .Mode "managed"}}<tr><th>Next renewal</th><td>{{date .RenewalTime}}</td></tr>{{end}}
+    <tr><th>Key</th><td>{{.KeyType}}</td></tr>
+    <tr><th>Created</th><td>{{date .Created}}</td></tr>
+  </table>
+</section>
+{{end}}{{end}}
+
+{{if .History}}
+<section class="card">
+  <h2>Issuance history</h2>
+  <table class="list"><thead><tr><th>Revision</th><th>Requested</th><th>Status</th><th>Expires</th></tr></thead><tbody>
+  {{range .History}}<tr><td>{{.Revision}}</td><td>{{date .Created}}</td><td>{{template "state" .State}}{{if .Message}} <span class="muted small">{{explain .Message}}</span>{{end}}</td><td>{{day .NotAfter}}</td></tr>{{end}}
+  </tbody></table>
+</section>
+{{end}}
+
+{{with .Cert}}
+<section class="card actions">
+  <h2>Actions</h2>
+  {{if eq .Mode "managed"}}
+  <form method="post" action="/certs/{{.ID}}/renew" data-confirm="Re-issue this certificate now?{{if .Public}} This counts against Let's Encrypt rate limits.{{end}}"><button>Renew now</button></form>
+  {{end}}
+  <form method="post" action="/certs/{{.ID}}/delete" data-confirm="Delete {{index .Names 0}}?{{if eq .Mode "managed"}} The key Secret is deleted and renewal stops.{{end}} This can't be undone."><button class="danger">{{if eq .Mode "managed"}}Delete and stop renewing{{else}}Delete{{end}}</button></form>
+</section>
+{{end}}
+{{end}}

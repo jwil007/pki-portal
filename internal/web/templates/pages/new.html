@@ -1,0 +1,27 @@
+{{define "content"}}
+<h1>New certificate</h1>
+<form class="card form" method="post" action="/certs/new" hx-post="/certs/check" hx-trigger="input from:#names delay:400ms, change from:input[type=radio]" hx-target="#check" hx-swap="innerHTML" hx-sync="this:replace">
+  <fieldset>
+    <legend>1. Type</legend>
+    <label class="choice"><input type="radio" name="type" value="public" {{if .Form.Public}}checked{{end}}> <b>Public</b> <span>Let's Encrypt (<code>{{.PublicIssuer}}</code>), trusted everywhere</span></label>
+    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Form.Public}}checked{{end}}> <b>Internal</b> <span>Your step-ca, trusted by devices that have the Wilsonfi root</span></label>
+  </fieldset>
+  <fieldset>
+    <legend>2. Names</legend>
+    <textarea id="names" name="names" rows="3" placeholder="fw.wilsonfi.dev&#10;vpn.wilsonfi.dev" required>{{.Form.Raw}}</textarea>
+    <p class="muted small">One per line or comma-separated. The first name becomes the CN.</p>
+    <div id="check">{{with .Check}}{{template "check" .}}{{end}}</div>
+  </fieldset>
+  <fieldset>
+    <legend>3. Lifecycle</legend>
+    <label class="choice"><input type="radio" name="lifecycle" value="managed" {{if .Form.Managed}}checked{{end}}> <b>Managed</b> <span>Auto-renews. The key is kept in a Kubernetes Secret.</span></label>
+    <label class="choice"><input type="radio" name="lifecycle" value="unmanaged" {{if not .Form.Managed}}checked{{end}}> <b>Unmanaged</b> <span>Issue once. The key is only kept in memory for a short time so you can download it.</span></label>
+  </fieldset>
+  <fieldset>
+    <legend>4. Key</legend>
+    <label class="choice"><input type="radio" name="key" value="rsa2048" {{if ne .Form.KeyType "ecdsa256"}}checked{{end}}> <b>RSA 2048</b> <span>Works with every appliance (default)</span></label>
+    <label class="choice"><input type="radio" name="key" value="ecdsa256" {{if eq .Form.KeyType "ecdsa256"}}checked{{end}}> <b>ECDSA P-256</b> <span>Smaller and faster, for modern clients</span></label>
+  </fieldset>
+  <button class="primary">Issue certificate</button>
+</form>
+{{end}}

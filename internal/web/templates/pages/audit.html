@@ -1,0 +1,9 @@
+{{define "content"}}
+<h1>Audit log</h1>
+<form class="filters" method="get" action="/audit"><input type="search" name="q" value="{{.Q}}" placeholder="Filter by action or certificate"><button>Filter</button></form>
+<section class="card">
+<table class="list"><thead><tr><th>Time</th><th>Action</th><th>Certificate</th><th>Detail</th><th>From</th></tr></thead><tbody>
+{{range .Events}}<tr><td>{{date .Time}}</td><td><span class="tag">{{.Action}}</span></td><td>{{if .Target}}<a href="/certs/{{.Target}}">{{.Target}}</a>{{end}}</td><td>{{.Detail}}</td><td class="muted">{{.Remote}}</td></tr>{{else}}<tr><td colspan="5" class="muted">No events.</td></tr>{{end}}
+</tbody></table>
+</section>
+{{end}}

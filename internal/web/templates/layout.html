@@ -1,0 +1,30 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
+<title>PKI Portal</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+{{if .Authed}}
+<header class="top">
+  <a class="brand" href="/">PKI Portal</a>
+  <nav>
+    <a href="/" {{if eq .Path "/"}}class="on"{{end}}>Dashboard</a>
+    <a href="/certs" {{if eq .Path "/certs"}}class="on"{{end}}>Certificates</a>
+    <a href="/certs/new" {{if eq .Path "/certs/new"}}class="on"{{end}}>New</a>
+    <a href="/csr" {{if eq .Path "/csr"}}class="on"{{end}}>Upload CSR</a>
+    <a href="/ca" {{if eq .Path "/ca"}}class="on"{{end}}>CA chain</a>
+    <a href="/audit" {{if eq .Path "/audit"}}class="on"{{end}}>Audit</a>
+  </nav>
+  <form method="post" action="/logout"><button class="link">Log out</button></form>
+</header>
+{{if .Staging}}<div class="banner">Public certificates use <code>{{.PublicIssuer}}</code>: test certs, not browser-trusted.</div>{{end}}
+{{end}}
+<main>{{template "content" .}}</main>
+</body>
+</html>{{end}}

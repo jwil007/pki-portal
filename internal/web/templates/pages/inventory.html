@@ -1,0 +1,15 @@
+{{define "content"}}
+<div class="head"><h1>Certificates</h1><a class="button primary" href="/certs/new">New certificate</a></div>
+<form class="filters" method="get" action="/certs">
+  <input type="search" name="q" value="{{.Q}}" placeholder="Search names, serial, issuer…">
+  <select name="state">
+    <option value="">Any status</option>
+    <option value="ready" {{if eq .State "ready"}}selected{{end}}>Ready</option>
+    <option value="issuing" {{if eq .State "issuing"}}selected{{end}}>Issuing</option>
+    <option value="failed" {{if eq .State "failed"}}selected{{end}}>Failed</option>
+    <option value="expired" {{if eq .State "expired"}}selected{{end}}>Expired</option>
+  </select>
+  <button>Filter</button>
+</form>
+<section class="card">{{template "certrows" .Certs}}</section>
+{{end}}

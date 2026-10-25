@@ -1,0 +1,8 @@
+{{define "content"}}
+<form class="card login" method="post" action="/login">
+  <h1>PKI Portal</h1>
+  {{if .Error}}<p class="msg err">{{.Error}}</p>{{end}}
+  <label>Password <input type="password" name="password" autofocus autocomplete="current-password" required></label>
+  <button class="primary">Log in</button>
+</form>
+{{end}}

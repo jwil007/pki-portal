@@ -1,0 +1,18 @@
+{{define "content"}}
+<h1>Upload CSR</h1>
+<p class="muted">For appliances that generate their own key. The key never reaches the portal; to renew, upload a new CSR.</p>
+<form class="card form" method="post" action="/csr" enctype="multipart/form-data" hx-post="/csr/parse" hx-encoding="multipart/form-data" hx-trigger="input from:#csr delay:400ms, change from:input[type=radio], change from:input[type=file]" hx-target="#preview">
+  <fieldset>
+    <legend>Issuer</legend>
+    <label class="choice"><input type="radio" name="type" value="public" {{if .Public}}checked{{end}}> <b>Public</b> <span><code>{{.PublicIssuer}}</code></span></label>
+    <label class="choice"><input type="radio" name="type" value="internal" {{if not .Public}}checked{{end}}> <b>Internal</b> <span>step-ca</span></label>
+  </fieldset>
+  <fieldset>
+    <legend>CSR</legend>
+    <textarea id="csr" name="csr" rows="10" class="mono" placeholder="-----BEGIN CERTIFICATE REQUEST-----">{{.CSR}}</textarea>
+    <p>or <input type="file" name="file" accept=".csr,.pem,.req,.txt"></p>
+    <div id="preview">{{with .Result}}{{template "csrpreview" .}}{{end}}</div>
+  </fieldset>
+  <button class="primary">Issue certificate</button>
+</form>
+{{end}}
