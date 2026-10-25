@@ -65,6 +65,33 @@
 </section>
 {{end}}
 
+<section class="card" id="hooks">
+  <h2>Delivery hooks</h2>
+  {{if .Hooks}}
+  <table class="list"><thead><tr><th>Hook</th><th>Last run</th><th>Result</th><th></th></tr></thead><tbody>
+  {{range .Hooks}}<tr>
+    <td><b>{{if .Driver}}{{.Driver.Label}}{{else}}{{.Type}}{{end}}</b>{{if .Name}} · {{.Name}}{{end}}<br><span class="muted small">{{if eq .Type "pull"}}token …{{printf "%.8s" .TokenHash}} (hash){{else if eq .Type "ssh"}}{{index .Config "user"}}@{{index .Config "host"}}{{else if eq .Type "semaphore"}}project {{index .Config "project_id"}}, template {{index .Config "template_id"}}{{else}}{{short (or (index .Config "url") "default topic")}}{{end}}</span></td>
+    <td>{{if eq .Type "pull"}}<span class="muted">on demand</span>{{else}}{{date .LastRun}}{{end}}</td>
+    <td>{{if eq .Type "pull"}}—{{else if .LastRun.IsZero}}<span class="muted">not run yet</span>{{else if .LastOK}}<span class="badge ready">ok</span>{{else}}<span class="badge failed">failed</span> <span class="small">{{short .LastMessage}}</span>{{if .Failures}}<br><span class="muted small">retry after {{date .NextAttempt}}</span>{{end}}{{end}}</td>
+    <td class="nowrap">{{if ne .Type "pull"}}<form method="post" action="/hooks/{{.ID}}/run" class="inline-form"><button>Run now</button></form>{{end}}
+      <form method="post" action="/hooks/{{.ID}}/delete" class="inline-form" data-confirm="Delete this hook?{{if eq .Type "pull"}} The token stops working immediately.{{end}}"><button class="danger">Delete</button></form></td>
+  </tr>{{end}}
+  </tbody></table>
+  {{else}}<p class="muted">No hooks. Add one to get notified, or to push or pull the certificate automatically when it renews.</p>{{end}}
+  <details class="addhook"><summary>Add a hook</summary>
+  <form method="post" action="/certs/{{.Cert.ID}}/hooks" class="dl">
+    <label>Type
+      <select name="type" hx-post="/hooks/fields" hx-trigger="change, load" hx-target="#hookfields">
+        {{range .Drivers}}<option value="{{.Type}}" {{if and .NeedsKey (ne $.Cert.Mode "managed")}}disabled{{end}}>{{.Label}}{{if and .NeedsKey (ne $.Cert.Mode "managed")}} (managed certs only){{end}}</option>{{end}}
+      </select>
+    </label>
+    <label>Label (optional) <input type="text" name="name" placeholder="e.g. nginx on debian-server"></label>
+    <div id="hookfields"></div>
+    <button class="primary">Add hook</button>
+  </form>
+  </details>
+</section>
+
 {{with .Cert}}
 <section class="card actions">
   <h2>Actions</h2>

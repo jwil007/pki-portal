@@ -96,3 +96,9 @@ table { border-collapse: collapse; width: 100%; }
 .dl { display: grid; gap: 0.5rem; max-width: 560px; }
 .dl select { margin-top: 0.25rem; }
 [hidden] { display: none !important; }
+pre.copy { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 0.6rem 0.75rem; overflow-x: auto; white-space: pre; user-select: all; }
+pre.copy.small { user-select: text; }
+.inline-form { display: inline; margin: 0; }
+.nowrap { white-space: nowrap; }
+.addhook summary { cursor: pointer; color: var(--accent); margin-top: 0.75rem; }
+.addhook form { margin-top: 0.75rem; }

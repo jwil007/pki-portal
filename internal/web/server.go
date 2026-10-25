@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jwil007/pki-portal/internal/config"
+	"github.com/jwil007/pki-portal/internal/hooks"
 	"github.com/jwil007/pki-portal/internal/internalca"
 	"github.com/jwil007/pki-portal/internal/keystash"
 	"github.com/jwil007/pki-portal/internal/kube"
@@ -40,13 +41,15 @@ type Server struct {
 	store      *store.Store
 	stash      *keystash.Stash
 	internal   *internalca.Issuer // nil when no step-ca provisioner is configured
+	hooks      *hooks.Manager
+	counters   counters
 	policy     policy.Policy
 	sessionKey []byte
 	pages      map[string]*template.Template
 	log        *slog.Logger
 }
 
-func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stash, internal *internalca.Issuer, log *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stash, internal *internalca.Issuer, hm *hooks.Manager, log *slog.Logger) (*Server, error) {
 	key, err := loadSessionKey(filepath.Join(cfg.DataDir, "session.key"))
 	if err != nil {
 		return nil, err
@@ -61,6 +64,7 @@ func New(cfg *config.Config, k *kube.Kube, st *store.Store, stash *keystash.Stas
 		store:      st,
 		stash:      stash,
 		internal:   internal,
+		hooks:      hm,
 		policy:     policy.Policy{Domains: cfg.Domains, PublicDomains: cfg.PublicDomains, IPRanges: ranges},
 		sessionKey: key,
 		log:        log,
@@ -97,7 +101,13 @@ var funcs = template.FuncMap{
 		}
 		return t.Local().Format("2006-01-02")
 	},
-	"join":    strings.Join,
+	"join": strings.Join,
+	"short": func(s string) string {
+		if len(s) > 80 {
+			return s[:77] + "…"
+		}
+		return s
+	},
 	"explain": kube.Explain,
 	"fp": func(s string) string { // colon-separate a hex fingerprint
 		var b strings.Builder
@@ -141,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
+	mux.HandleFunc("GET /api/v1/certs/{id}/{format}", s.pullAPI)
 
 	auth := http.NewServeMux()
 	auth.HandleFunc("POST /logout", s.logout)
@@ -157,6 +168,10 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("POST /certs/{id}/download", s.download)
 	auth.HandleFunc("POST /certs/{id}/renew", s.renew)
 	auth.HandleFunc("POST /certs/{id}/delete", s.delete)
+	auth.HandleFunc("POST /certs/{id}/hooks", s.hookCreate)
+	auth.HandleFunc("POST /hooks/fields", s.hookFields)
+	auth.HandleFunc("POST /hooks/{hid}/run", s.hookRun)
+	auth.HandleFunc("POST /hooks/{hid}/delete", s.hookDelete)
 	auth.HandleFunc("GET /ca", s.caPage)
 	auth.HandleFunc("GET /ca/{file}", s.caFile)
 	auth.HandleFunc("GET /audit", s.audit)
@@ -234,7 +249,8 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	pw := r.FormValue("password")
-	if subtle.ConstantTimeCompare([]byte(pw), []byte(s.cfg.Password)) != 1 {
+	want := s.cfg.CurrentPassword()
+	if want == "" || subtle.ConstantTimeCompare([]byte(pw), []byte(want)) != 1 {
 		s.record(r, "login-failed", "", "")
 		time.Sleep(time.Second) // slow down guessing
 		w.WriteHeader(http.StatusUnauthorized)

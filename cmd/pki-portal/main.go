@@ -3,6 +3,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,16 +13,20 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jwil007/pki-portal/internal/config"
+	"github.com/jwil007/pki-portal/internal/hooks"
 	"github.com/jwil007/pki-portal/internal/internalca"
 	"github.com/jwil007/pki-portal/internal/keystash"
 	"github.com/jwil007/pki-portal/internal/kube"
 	"github.com/jwil007/pki-portal/internal/stepca"
 	"github.com/jwil007/pki-portal/internal/store"
 	"github.com/jwil007/pki-portal/internal/web"
+
+	"golang.org/x/crypto/ssh"
 )
 
 var version = "dev"
@@ -65,7 +72,12 @@ func run(log *slog.Logger) error {
 	} else {
 		log.Warn("PORTAL_STEPCA_PASSWORD not set: internal certificates are disabled")
 	}
-	srv, err := web.New(cfg, k, st, stash, internal, log)
+	env, err := hookEnv(cfg)
+	if err != nil {
+		return err
+	}
+	hm := hooks.NewManager(st, k, env, cfg.BaseURL, log)
+	srv, err := web.New(cfg, k, st, stash, internal, hm, log)
 	if err != nil {
 		return err
 	}
@@ -83,6 +95,7 @@ func run(log *slog.Logger) error {
 				stash.Sweep()
 				if internal != nil && time.Now().Minute()%10 == 0 {
 					renewInternal(ctx, internal, st, log)
+					hm.Kick()
 				}
 			}
 		}
@@ -90,6 +103,16 @@ func run(log *slog.Logger) error {
 
 	if internal != nil {
 		go renewInternal(ctx, internal, st, log)
+	}
+	go hm.Run(ctx)
+	if cfg.MetricsListen != "" {
+		ms := &http.Server{Addr: cfg.MetricsListen, Handler: srv.Metrics(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics listener", "err", err)
+			}
+		}()
+		go func() { <-ctx.Done(); ms.Close() }()
 	}
 	hs := &http.Server{Addr: cfg.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -121,4 +144,43 @@ func renewInternal(ctx context.Context, issuer *internalca.Issuer, st *store.Sto
 		log.Info("renewed", "cert", r.ID)
 		st.Log("renew", r.ID, "automatic", "scheduler")
 	}
+}
+
+// hookEnv builds the shared settings for hook drivers, including the portal's
+// SSH key (from PORTAL_SSH_KEY_FILE, or generated once into the data dir).
+func hookEnv(cfg *config.Config) (*hooks.Env, error) {
+	env := &hooks.Env{
+		HTTP:           &http.Client{Timeout: 20 * time.Second},
+		DefaultNtfyURL: cfg.NtfyURL,
+		SemaphoreURL:   cfg.SemaphoreURL,
+		SemaphoreToken: cfg.SemaphoreToken,
+	}
+	path := cfg.SSHKeyFile
+	if path == "" {
+		path = filepath.Join(cfg.DataDir, "ssh_ed25519")
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			_, priv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+			block, err := ssh.MarshalPrivateKey(priv, "pki-portal")
+			if err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+				return nil, err
+			}
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading SSH key: %w", err)
+	}
+	signer, err := ssh.ParsePrivateKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing SSH key %s: %w", path, err)
+	}
+	env.SSHSigner = signer
+	env.SSHPublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) + " pki-portal"
+	return env, nil
 }

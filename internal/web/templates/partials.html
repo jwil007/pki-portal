@@ -46,3 +46,17 @@
 </tbody>
 </table>
 {{end}}
+
+{{define "hookfields"}}
+{{with .Driver}}
+<p class="muted small">{{.Help}}</p>
+{{range .Fields}}
+<label>{{.Label}}{{if .Required}} *{{end}}
+  {{if eq .Kind "textarea"}}<textarea name="cfg_{{.Name}}" rows="2" class="mono" placeholder="{{.Placeholder}}"></textarea>
+  {{else}}<input type="{{if eq .Kind "password"}}password{{else if eq .Kind "number"}}number{{else}}text{{end}}" name="cfg_{{.Name}}" placeholder="{{.Placeholder}}" {{if .Required}}required{{end}} autocomplete="off">{{end}}
+</label>
+{{if .Help}}<p class="muted small">{{.Help}}</p>{{end}}
+{{end}}
+{{if eq .Type "ssh"}}{{if $.SSHPublicKey}}<p class="small">Portal public key for <code>authorized_keys</code>:</p><pre class="mono small copy">{{$.SSHPublicKey}}</pre>{{end}}{{end}}
+{{end}}
+{{end}}

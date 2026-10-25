@@ -1,0 +1,55 @@
+{{define "content"}}
+<h1>{{.Driver.Label}} added</h1>
+<p class="muted">For <a href="/certs/{{.Cert.ID}}">{{index .Cert.Names 0}}</a>. {{if .Token}}{{else}}It runs whenever this certificate is issued or renewed; use Run now to test it.{{end}}</p>
+
+{{range $k, $v := .Notes}}<p class="msg warn"><b>{{$k}}:</b> <code class="mono">{{$v}}</code>{{if eq $k "Signing secret"}}. Shown only once, so save it now.{{end}}</p>{{end}}
+
+{{if .Token}}
+<section class="card">
+  <h2>API token</h2>
+  <p class="msg warn">Shown only once. It can only fetch this certificate. Delete the hook to revoke it.</p>
+  <pre class="mono copy">{{.Token}}</pre>
+  <h3>Quick test</h3>
+<pre class="mono small copy">curl -fsS -H "Authorization: Bearer {{.Token}}" \
+  {{.BaseURL}}/api/v1/certs/{{.Cert.ID}}/fullchain</pre>
+  <p class="muted small">Formats: {{range $i, $f := .Formats}}{{if $i}}, {{end}}<code>{{$f.ID}}</code>{{end}}. Password formats (p12, encrypted key) take the password in an <code>X-PKI-Password</code> header. Add <code>?root=1</code> to include the root CA on internal certs.{{if not .HasKey}} This certificate's key isn't held by the portal, so key formats will be refused.{{end}}</p>
+
+  <h3>systemd: fetch daily and reload</h3>
+  <p class="muted small">1. Token file, readable by root only:</p>
+<pre class="mono small copy">install -d -m 700 /etc/pki-portal
+printf 'PKI_TOKEN=%s\n' '{{.Token}}' > /etc/pki-portal/{{.Slug}}.env
+chmod 600 /etc/pki-portal/{{.Slug}}.env</pre>
+  <p class="muted small">2. <code>/etc/systemd/system/pki-fetch-{{.Slug}}.service</code></p>
+<pre class="mono small copy">[Unit]
+Description=Fetch {{index .Cert.Names 0}} from the PKI portal
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pki-portal/{{.Slug}}.env
+ExecStart=/bin/sh -c 'set -e; u={{.BaseURL}}/api/v1/certs/{{.Cert.ID}}; \
+  curl -fsS -H "Authorization: Bearer $PKI_TOKEN" -o /etc/ssl/{{.Slug}}.pem.new $u/fullchain; \{{if .HasKey}}
+  curl -fsS -H "Authorization: Bearer $PKI_TOKEN" -o /etc/ssl/{{.Slug}}.key.new $u/key; \
+  chmod 600 /etc/ssl/{{.Slug}}.key.new; mv /etc/ssl/{{.Slug}}.key.new /etc/ssl/{{.Slug}}.key; \{{end}}
+  mv /etc/ssl/{{.Slug}}.pem.new /etc/ssl/{{.Slug}}.pem'
+# Change to whatever uses the certificate:
+ExecStartPost=/bin/systemctl reload nginx</pre>
+  <p class="muted small">3. <code>/etc/systemd/system/pki-fetch-{{.Slug}}.timer</code></p>
+<pre class="mono small copy">[Unit]
+Description=Daily fetch of {{index .Cert.Names 0}}
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target</pre>
+<pre class="mono small copy">systemctl daemon-reload
+systemctl enable --now pki-fetch-{{.Slug}}.timer
+systemctl start pki-fetch-{{.Slug}}.service   # first fetch now</pre>
+</section>
+{{end}}
+<p><a class="button primary" href="/certs/{{.Cert.ID}}#hooks">Back to the certificate</a></p>
+{{end}}

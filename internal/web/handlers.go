@@ -15,6 +15,7 @@ import (
 
 	"github.com/jwil007/pki-portal/internal/csrutil"
 	"github.com/jwil007/pki-portal/internal/formats"
+	"github.com/jwil007/pki-portal/internal/hooks"
 	"github.com/jwil007/pki-portal/internal/kube"
 	"github.com/jwil007/pki-portal/internal/policy"
 )
@@ -186,6 +187,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, "issue", id, fmt.Sprintf("%s via %s: %s", mode, res.Issuer, strings.Join(f.Names, ", ")))
+	s.counters.issue(res.Issuer, mode)
 	http.Redirect(w, r, "/certs/"+id, http.StatusSeeOther)
 }
 
@@ -302,6 +304,7 @@ func (s *Server) csrSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, "issue", id, fmt.Sprintf("csr via %s: %s", res.Issuer, strings.Join(res.Names, ", ")))
+	s.counters.issue(res.Issuer, kube.FromCSR)
 	http.Redirect(w, r, "/certs/"+id, http.StatusSeeOther)
 }
 
@@ -325,7 +328,8 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data := map[string]any{"Cert": c, "Formats": formats.All, "Internal": c.Backend == kube.BackendStepCA || !c.Public}
+	data := map[string]any{"Cert": c, "Formats": formats.All, "Internal": c.Backend == kube.BackendStepCA || !c.Public,
+		"Hooks": s.hookViews(c.ID), "Drivers": hooks.All(), "BaseURL": s.cfg.BaseURL}
 	switch c.Mode {
 	case kube.Managed:
 		data["HasKey"] = c.Leaf != nil
@@ -449,6 +453,7 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, "renew", c.ID, "manual")
+	s.hooks.Kick()
 	http.Redirect(w, r, "/certs/"+c.ID, http.StatusSeeOther)
 }
 
@@ -462,6 +467,7 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.stash.Delete(c.ID)
+	s.store.DeleteHooksFor(c.ID)
 	s.record(r, "delete", c.ID, strings.Join(c.Names, ", "))
 	http.Redirect(w, r, "/certs", http.StatusSeeOther)
 }

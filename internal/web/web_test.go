@@ -1,13 +1,22 @@
 package web
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +27,24 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/jwil007/pki-portal/internal/config"
+	"github.com/jwil007/pki-portal/internal/hooks"
 	"github.com/jwil007/pki-portal/internal/keystash"
 	"github.com/jwil007/pki-portal/internal/kube"
 	"github.com/jwil007/pki-portal/internal/store"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
+	ts, c, _, _ := newTestServerFull(t)
+	return ts, c
+}
+
+func newTestServerFull(t *testing.T) (*httptest.Server, *http.Client, *kube.Kube, *config.Config) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{
 		Password: "hunter22", DataDir: dir, Namespace: "pki-managed",
 		PublicIssuer: "letsencrypt-staging",
-		Domains: []string{"wilsonfi.dev"}, PublicDomains: []string{"wilsonfi.dev"},
+		Domains:      []string{"wilsonfi.dev"}, PublicDomains: []string{"wilsonfi.dev"},
 		CAConfigMap: "pki/step-certificates-certs", InsecureCookie: true,
 	}
 	st, err := store.Open(filepath.Join(dir, "portal.db"))
@@ -38,14 +53,16 @@ func newTestServer(t *testing.T) (*httptest.Server, *http.Client) {
 	}
 	core := fake.NewClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "pki", Name: "step-certificates-certs"}})
 	k := kube.NewWithClients("pki-managed", core, cmfake.NewClientset())
-	srv, err := New(cfg, k, st, keystash.New(time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	hm := hooks.NewManager(st, k, &hooks.Env{HTTP: http.DefaultClient}, "http://portal", log)
+	srv, err := New(cfg, k, st, keystash.New(time.Minute), nil, hm, log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
-	return ts, &http.Client{Jar: jar}
+	return ts, &http.Client{Jar: jar}, k, cfg
 }
 
 func body(t *testing.T, resp *http.Response) string {
@@ -123,4 +140,77 @@ func TestInternalDisabledWithoutProvisioner(t *testing.T) {
 	if b := body(t, resp); !strings.Contains(b, "internal certificates are disabled") {
 		t.Errorf("check = %s", b)
 	}
+}
+
+func TestPullAPI(t *testing.T) {
+	ts, c, k, _ := newTestServerFull(t)
+	c.PostForm(ts.URL+"/login", url.Values{"password": {"hunter22"}})
+	root, chain := testChain(t)
+	if err := k.SaveSigned(context.Background(), "nas-x", kube.FromCSR, chain, nil, root, "rsa2048", 1); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := c.PostForm(ts.URL+"/certs/nas-x/hooks", url.Values{"type": {"pull"}})
+	page := body(t, resp)
+	token := regexp.MustCompile(`pkp_[A-Za-z0-9_-]+`).FindString(page)
+	if token == "" || !strings.Contains(page, "pki-fetch-nas.wilsonfi.dev.timer") {
+		t.Fatalf("no token/snippet in page: %s", page)
+	}
+	get := func(path, tok string) (int, string) {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		resp, err := http.DefaultClient.Do(req) // no session cookie
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body(t, resp)
+	}
+	if code, b := get("/api/v1/certs/nas-x/fullchain", token); code != 200 || !strings.Contains(b, "BEGIN CERTIFICATE") {
+		t.Fatalf("fullchain: %d %s", code, b)
+	}
+	if code, _ := get("/api/v1/certs/nas-x/key", token); code != http.StatusConflict {
+		t.Errorf("key for CSR cert: %d", code)
+	}
+	if code, _ := get("/api/v1/certs/other/fullchain", token); code != http.StatusUnauthorized {
+		t.Errorf("token used on another cert: %d", code)
+	}
+	if code, _ := get("/api/v1/certs/nas-x/fullchain", ""); code != http.StatusUnauthorized {
+		t.Errorf("no token: %d", code)
+	}
+	// Revoke by deleting the hook.
+	resp, _ = c.PostForm(ts.URL+"/hooks/1/delete", nil)
+	resp.Body.Close()
+	if code, _ := get("/api/v1/certs/nas-x/fullchain", token); code != http.StatusUnauthorized {
+		t.Errorf("after delete: %d", code)
+	}
+}
+
+func TestPasswordFileRotation(t *testing.T) {
+	ts, c, _, cfg := newTestServerFull(t)
+	pwFile := filepath.Join(t.TempDir(), "pw")
+	os.WriteFile(pwFile, []byte("first-pass\n"), 0o600)
+	cfg.PasswordFile = pwFile
+	if resp, _ := c.PostForm(ts.URL+"/login", url.Values{"password": {"first-pass"}}); resp.StatusCode != 200 || resp.Request.URL.Path != "/" {
+		t.Fatalf("login with file password failed: %d %s", resp.StatusCode, resp.Request.URL.Path)
+	}
+	os.WriteFile(pwFile, []byte("second-pass"), 0o600)
+	jar, _ := cookiejar.New(nil)
+	c2 := &http.Client{Jar: jar}
+	if resp, _ := c2.PostForm(ts.URL+"/login", url.Values{"password": {"first-pass"}}); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("old password still works: %d", resp.StatusCode)
+	}
+	if resp, _ := c2.PostForm(ts.URL+"/login", url.Values{"password": {"second-pass"}}); resp.Request.URL.Path != "/" {
+		t.Errorf("new password rejected")
+	}
+}
+
+func testChain(t *testing.T) (*x509.Certificate, []byte) {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(9), DNSNames: []string{"nas.wilsonfi.dev"}, IsCA: true, BasicConstraintsValid: true,
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	c, _ := x509.ParseCertificate(der)
+	return c, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
